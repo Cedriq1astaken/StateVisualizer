@@ -21,15 +21,14 @@ The visualizer reads the current Q# operation and displays the captured qubit st
 
 ## Project Map
 
-- `src/package/src/extension.ts` - VS Code extension entry point
-- `src/package/src/webview.html` - visualizer HTML
-- `src/package/src/webview.css` - visualizer styles
-- `src/package/src/script/webview.js` - main browser-side visualizer logic
-- `src/package/src/script/qsharpRuntime.js` - Q# parsing and snapshot capture
-- `src/package/src/script/blochVector.js` - Bloch vector calculations
-- `src/package/src/script/qsphereVector.js` - Q-sphere geometry and colors
-- `src/package/src/script/math.js` - shared math and geometry helpers
-- `src/package/src/shader` - WebGPU shaders
+- `src/extension.ts` - VS Code extension entry point
+- `src/webview.html` - visualizer HTML
+- `src/webview.css` - visualizer styles
+- `src/script/webview.js` - main browser-side visualizer logic
+- `src/script/qsharpRuntime.js` - Q# parsing and snapshot capture
+- `src/script/blochVector.js` - Bloch vector calculations
+- `src/script/qsphereVector.js` - Q-sphere geometry and colors
+- `src/script/math.js` - shared math and geometry helpers
 
 ## Notes
 
