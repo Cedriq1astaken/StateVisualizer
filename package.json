@@ -1,1 +1,83 @@
-{}
+{
+  "name": "qsphere",
+  "displayName": "Qsphere Quantum Visualizer",
+  "description": "Quantum circuit and state visualization extension for VS Code",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:qsharp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "qsphere.openVisualizer",
+        "title": "Qsphere: Open Quantum Visualizer",
+        "category": "Qsphere",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "qsphere.inspectCurrentLine",
+        "title": "Qsphere: Step to Current Line",
+        "category": "Qsphere"
+      },
+      {
+        "command": "qsphere.replayAnimation",
+        "title": "Qsphere: Replay Animation",
+        "category": "Qsphere"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "qsphere.inspectCurrentLine",
+        "key": "shift+enter",
+        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "qsphere.openVisualizer",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "qsphere.openVisualizer",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
+        },
+        {
+          "command": "qsphere.inspectCurrentLine",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
+        }
+      ]
+    }
+  },
+
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "npm run bundle:webview && tsc -p ./",
+    "bundle:webview": "node build-webview.mjs",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "qsharp-lang": "^1.31.0",
+    "three": "^0.170.0"
+  }
+}
