@@ -1,6 +1,5 @@
-// Main browser-side controller for the visualizer.
-// It coordinates Q# results, WebGPU buffers, canvas fallback drawing, tabs,
-// animation, pointer interaction, and the per-qubit Bloch cards.
+import * as THREE from 'three';
+
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
 const canvas = document.querySelector('canvas');
@@ -17,16 +16,12 @@ let miniRenderers = [];
 const qubitSphereSize = 270;
 let qsphereHoverInfo = null;
 
-// Compare vectors with a small tolerance so animation can settle cleanly despite
-// floating-point interpolation noise.
 function vectorsClose(a, b, epsilon = 1e-3) {
     return Math.abs(a[0] - b[0]) < epsilon
         && Math.abs(a[1] - b[1]) < epsilon
         && Math.abs(a[2] - b[2]) < epsilon;
 }
 
-// Build the DOM wrapper used by each mini Bloch canvas. Labels live in the same
-// stage so their projected positions track the sphere during rotation.
 function createQubitSphereStage(card, canvasElement) {
     const stage = document.createElement('div');
     stage.className = 'qubit-sphere-stage';
@@ -54,7 +49,6 @@ function setStatus(message) {
     if (statusText) statusText.textContent = '';
 }
 
-// Paint the phase key with the same phaseToRgb mapping used by Q-sphere nodes.
 function drawPhaseLegend() {
     const legendCanvas = document.getElementById('qsphere-phase-wheel');
     if (!legendCanvas || typeof phaseToRgb !== 'function') return;
@@ -90,8 +84,6 @@ function drawPhaseLegend() {
     context.stroke();
 }
 
-// Keep tab state in both the DOM and a body data attribute so CSS can enforce the
-// active view even while JavaScript is replacing/reinserting the main container.
 function updateModeTabs() {
     document.body.dataset.visualizationMode = currentMode;
     document.querySelectorAll('.view-tab').forEach(tab => {
@@ -133,45 +125,310 @@ function formatPhasePi(phase) {
     return `${units.toFixed(2)}pi`;
 }
 
-function updateQsphereBuffers(qs, rebuildLabels = true) {
-    if (!webgpuState || !qs) return;
-
-    const nodeVerts = qs.nodeVertices;
-    if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
-        webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
-        webgpuState.qnodeVertexCount = nodeVerts.length / 7;
-    }
-
-    const lineVerts = qs.lineVertices || qs.ringVertices;
-    if (lineVerts.byteLength <= webgpuState.qsphereLineVertexBuffer.size) {
-        webgpuState.device.queue.writeBuffer(webgpuState.qsphereLineVertexBuffer, 0, lineVerts);
-        webgpuState.qsphereLineVertexCount = lineVerts.length / 6;
-    }
-    const spokeVerts = qs.spokeVertices || new Float32Array(0);
-    if (spokeVerts.byteLength <= webgpuState.qsphereSpokeVertexBuffer.size) {
-        webgpuState.device.queue.writeBuffer(webgpuState.qsphereSpokeVertexBuffer, 0, spokeVerts);
-        webgpuState.qsphereSpokeVertexCount = spokeVerts.length / 7;
-    }
-    webgpuState.qsphereData = qs;
-    if (rebuildLabels) rebuildQsphereLabels(qs.points, qs.N);
+function createSphereMaterial() {
+    return new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        vertexShader: `
+            varying vec3 vNormal;
+            varying float vDepth;
+            void main() {
+                vNormal = normalize(normalMatrix * normal);
+                vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPos;
+                vDepth = gl_Position.z / gl_Position.w;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vNormal;
+            varying float vDepth;
+            void main() {
+                vec3 baseColor = vec3(0.92, 0.92, 0.92);
+                float depthFactor = mix(1.0, 0.52, clamp(vDepth * 0.5 + 0.5, 0.0, 1.0));
+                vec3 N = normalize(vNormal);
+                float centerFactor = max(N.z, 0.0);
+                float alpha = mix(0.6, 0.2, centerFactor);
+                gl_FragColor = vec4(baseColor * depthFactor, alpha);
+            }
+        `
+    });
 }
 
-// Copy the latest Q-sphere geometry into dedicated GPU buffers. Q-sphere rings
-// must stay separate from the Bloch line buffer used by mini renderers.
-function updateQsphereState(result, options = {}) {
-    if (!webgpuState || !result) return;
+function createArrowMaterial() {
+    return new THREE.ShaderMaterial({
+        transparent: false,
+        side: THREE.DoubleSide,
+        vertexShader: `
+            varying vec3 vNormal;
+            varying float vDepth;
+            void main() {
+                vNormal = normalize(normalMatrix * normal);
+                vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPos;
+                vDepth = gl_Position.z / gl_Position.w;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vNormal;
+            varying float vDepth;
+            void main() {
+                vec3 baseColor = vec3(0.55, 0.12, 0.88);
+                float depthFactor = mix(1.0, 0.45, clamp(vDepth * 0.5 + 0.5, 0.0, 1.0));
+                vec3 N = normalize(vNormal);
+                vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));
+                float diffuse = max(dot(N, lightDir), 0.0);
+                float ambient = 0.35;
+                float lighting = ambient + (1.0 - ambient) * diffuse;
+                gl_FragColor = vec4(baseColor * depthFactor * lighting, 1.0);
+            }
+        `
+    });
+}
+
+function createLineMaterial() {
+    return new THREE.LineBasicMaterial({
+        color: new THREE.Color(0.55, 0.55, 0.65),
+        transparent: true,
+        opacity: 0.5,
+        depthTest: true
+    });
+}
+
+function createArrowMesh(blochVec, material) {
+    const group = new THREE.Group();
+    const r = Math.sqrt(blochVec[0] ** 2 + blochVec[1] ** 2 + blochVec[2] ** 2);
+    if (r < 0.001) return group;
+
+    const shaftRadius = 0.02 * Math.max(0.3, Math.min(1.0, r));
+    const headRadius = 0.055 * Math.max(0.3, Math.min(1.0, r));
+    const headLength = 0.14 * r;
+    const shaftLength = 0.86 * r;
+
+    const useMat = material || createArrowMaterial();
+
+    const shaftGeo = new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 12);
+    shaftGeo.translate(0, shaftLength / 2, 0);
+    const shaft = new THREE.Mesh(shaftGeo, useMat);
+    group.add(shaft);
+
+    const headGeo = new THREE.ConeGeometry(headRadius, headLength, 12);
+    headGeo.translate(0, shaftLength + headLength / 2, 0);
+    const head = new THREE.Mesh(headGeo, useMat);
+    group.add(head);
+
+    const dir = new THREE.Vector3(blochVec[0], blochVec[1], blochVec[2]).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(dir.dot(up)) > 0.9999) {
+        if (dir.y < 0) {
+            group.rotation.z = Math.PI;
+        }
+    } else {
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, dir);
+        group.quaternion.copy(quat);
+    }
+
+    return group;
+}
+
+function createSphereWireframe(lineMat) {
+    const group = new THREE.Group();
+    const segments = 64;
+    const mat = lineMat || createLineMaterial();
+
+    const axisPositions = new Float32Array([
+        -1, 0, 0, 1, 0, 0,
+        0, -1, 0, 0, 1, 0,
+        0, 0, -1, 0, 0, 1
+    ]);
+    const axisGeo = new THREE.BufferGeometry();
+    axisGeo.setAttribute('position', new THREE.BufferAttribute(axisPositions, 3));
+    group.add(new THREE.LineSegments(axisGeo, mat));
+
+    for (let plane = 0; plane < 3; plane++) {
+        const circleVerts = [];
+        for (let i = 0; i <= segments; i++) {
+            const a = (i / segments) * 2 * Math.PI;
+            const c = Math.cos(a), s = Math.sin(a);
+            if (plane === 0) circleVerts.push(c, 0, s);
+            else if (plane === 1) circleVerts.push(c, s, 0);
+            else circleVerts.push(0, s, c);
+        }
+        const circleGeo = new THREE.BufferGeometry();
+        circleGeo.setAttribute('position', new THREE.Float32BufferAttribute(circleVerts, 3));
+        group.add(new THREE.Line(circleGeo, mat));
+    }
+
+    return group;
+}
+
+function createQnodeMesh(cx, cy, cz, radius, r, g, b, a) {
+    const geo = new THREE.SphereGeometry(radius, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(r, g, b),
+        transparent: a < 1.0,
+        opacity: a
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(cx, cy, cz);
+    return mesh;
+}
+
+function createSpokeMesh(end, radius, r, g, b, a) {
+    const [ex, ey, ez] = end;
+    const length = Math.hypot(ex, ey, ez);
+    if (length < 1e-6) return null;
+
+    const geo = new THREE.CylinderGeometry(radius, radius, length, 6);
+    geo.translate(0, length / 2, 0);
+    const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(r, g, b),
+        transparent: a < 1.0,
+        opacity: a
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+
+    const dir = new THREE.Vector3(ex, ey, ez).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(dir.dot(up)) > 0.9999) {
+        if (dir.y < 0) mesh.rotation.z = Math.PI;
+    } else {
+        mesh.quaternion.setFromUnitVectors(up, dir);
+    }
+
+    return mesh;
+}
+
+function createHammingRings(N, lineMat) {
+    const group = new THREE.Group();
+    const segments = 64;
+    const mat = lineMat || createLineMaterial();
+    for (let w = 1; w < N; w++) {
+        const theta = (Math.PI * w) / N;
+        const ringY = Math.cos(theta);
+        const ringR = Math.sin(theta);
+        const verts = [];
+        for (let i = 0; i <= segments; i++) {
+            const a = (i / segments) * 2 * Math.PI;
+            verts.push(ringR * Math.cos(a), ringY, ringR * Math.sin(a));
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+        group.add(new THREE.Line(geo, mat));
+    }
+    return group;
+}
+
+let threeState = null;
+
+function initThreeRenderer() {
+    const renderer = new THREE.WebGLRenderer({
+        canvas,
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: true
+    });
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(
+        45,
+        (canvas.clientWidth || 270) / (canvas.clientHeight || 270),
+        0.1,
+        100
+    );
+    camera.position.set(0, 0, 3);
+    camera.lookAt(0, 0, 0);
+
+    const sphereMaterial = createSphereMaterial();
+    const lineMaterial = createLineMaterial();
+
+    const sphereGeo = new THREE.SphereGeometry(1, 32, 32);
+    const sphereMesh = new THREE.Mesh(sphereGeo, sphereMaterial);
+    scene.add(sphereMesh);
+
+    const wireframe = createSphereWireframe(lineMaterial);
+    scene.add(wireframe);
+
+    const arrowGroup = new THREE.Group();
+    scene.add(arrowGroup);
+
+    const qsphereGroup = new THREE.Group();
+    qsphereGroup.visible = false;
+    scene.add(qsphereGroup);
+
+    return {
+        renderer,
+        scene,
+        camera,
+        sphereMesh,
+        wireframe,
+        arrowGroup,
+        qsphereGroup,
+        lineMaterial
+    };
+}
+
+function resizeRenderer(state) {
+    if (!state) return;
+    const width = canvas.clientWidth || 270;
+    const height = canvas.clientHeight || 270;
+    if (canvas.width !== width || canvas.height !== height) {
+        state.renderer.setSize(width, height, false);
+        state.camera.aspect = width / height;
+        state.camera.updateProjectionMatrix();
+    }
+}
+
+function updateQsphereScene(result, options = {}) {
+    if (!threeState || !result) return;
 
     const qs = computeQsphere(result, {
-        focusedIndex: webgpuState.qsphereHoveredIndex
+        focusedIndex: threeState._qsphereHoveredIndex
     });
-    updateQsphereBuffers(qs, options.rebuildLabels !== false);
+
+    const group = threeState.qsphereGroup;
+    while (group.children.length > 0) {
+        const child = group.children[0];
+        group.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+    }
+
+    const rings = createHammingRings(qs.N, threeState.lineMaterial);
+    group.add(rings);
+
+    const state = qs.state;
+    const N = qs.N;
+    const points = qs.points;
+
+    for (const point of points) {
+        const amp = state[point.index] || { re: 0, im: 0 };
+        const probability = amp.re * amp.re + amp.im * amp.im;
+        if (probability < 1e-5) continue;
+
+        const radius = 0.12 * Math.sqrt(probability);
+        const phase = Math.atan2(amp.im, amp.re);
+        const [r, g, b] = phaseToRgb(phase);
+        const focusedIndex = threeState._qsphereHoveredIndex;
+        const alpha = (focusedIndex === null || focusedIndex === undefined || point.index === focusedIndex) ? 1.0 : 0.24;
+
+        const node = createQnodeMesh(point.x, point.y, point.z, radius, r, g, b, alpha);
+        group.add(node);
+
+        const spoke = createSpokeMesh([point.x, point.y, point.z], 0.015, r, g, b, alpha);
+        if (spoke) group.add(spoke);
+    }
+
+    threeState._qsphereData = qs;
+    if (options.rebuildLabels !== false) rebuildQsphereLabels(qs.points, qs.N);
 }
 
 function setQsphereHoveredIndex(index) {
-    if (!webgpuState || webgpuState.qsphereHoveredIndex === index) return;
-
-    webgpuState.qsphereHoveredIndex = index;
-    if (lastParsedResult) updateQsphereState(lastParsedResult, { rebuildLabels: false });
+    if (!threeState || threeState._qsphereHoveredIndex === index) return;
+    threeState._qsphereHoveredIndex = index;
+    if (lastParsedResult) updateQsphereScene(lastParsedResult, { rebuildLabels: false });
 }
 
 function clearQsphereHover() {
@@ -180,20 +437,20 @@ function clearQsphereHover() {
 }
 
 function updateQsphereHover(event) {
-    if (!webgpuState || currentMode !== 'qsphere' || isDragging) {
+    if (!threeState || currentMode !== 'qsphere' || isDragging) {
         clearQsphereHover();
         return;
     }
 
     const hoverInfo = getQsphereHoverInfo();
-    const qsphereData = webgpuState.qsphereData;
+    const qsphereData = threeState._qsphereData;
     if (!hoverInfo || !qsphereData?.hoverTargets?.length) return;
 
     const rect = canvas.getBoundingClientRect();
     const width = qsphereContainer.clientWidth;
     const height = qsphereContainer.clientHeight;
     const point = [event.clientX - rect.left, event.clientY - rect.top];
-    const modelMatrix = rotateMatrix(...rotationAngles, webgpuState.projMatrix);
+    const modelMatrix = rotateMatrix(...rotationAngles, threeState._projMatrix);
     const center = projectPoint([0, 0, 0], modelMatrix, width, height);
 
     let best = null;
@@ -232,7 +489,6 @@ function updateQsphereHover(event) {
     hoverInfo.hidden = false;
 }
 
-// Switch views, refresh visibility, and render the already parsed state immediately.
 function setVisualizationMode(mode) {
     if (mode !== 'bloch' && mode !== 'qsphere') return;
     clearQsphereHover();
@@ -241,12 +497,23 @@ function setVisualizationMode(mode) {
 
     updateVisibility(lastParsedResult?.qubitsDeclared || 0);
     if (lastParsedResult && currentMode === 'qsphere') {
-        resizeCanvas();
-        if (webgpuState) webgpuState.projMatrix = webgpuState.buildProjMatrix();
-        updateQsphereState(lastParsedResult);
+        resizeRenderer(threeState);
+        updateQsphereScene(lastParsedResult);
     }
 
-    if (webgpuState) render(webgpuState);
+    if (threeState) {
+        updateSceneForMode();
+        renderScene();
+    }
+}
+
+function updateSceneForMode() {
+    if (!threeState) return;
+    const isQsphere = currentMode === 'qsphere';
+    threeState.qsphereGroup.visible = isQsphere;
+    threeState.sphereMesh.visible = isQsphere;
+    threeState.wireframe.visible = isQsphere;
+    threeState.arrowGroup.visible = false;
 }
 
 document.querySelectorAll('.view-tab').forEach(tab => {
@@ -255,418 +522,6 @@ document.querySelectorAll('.view-tab').forEach(tab => {
 updateModeTabs();
 drawPhaseLegend();
 
-// Fetch a WGSL shader as text so it can be compiled into a WebGPU shader module.
-async function loadShader(path) {
-    const response = await fetch(path);
-    if (!response.ok) {
-        throw new Error(`Failed to load shader: ${path}`);
-    }
-
-    return response.text();
-}
-
-// Match the backing canvas resolution to its CSS size and device pixel ratio.
-function resizeCanvas() {
-    const pixelRatio = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.floor(canvas.clientWidth * pixelRatio));
-    const height = Math.max(1, Math.floor(canvas.clientHeight * pixelRatio));
-
-    if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-    }
-}
-
-let pendingCode = null;
-let fallbackMode = false;
-
-// Position labels when WebGPU is unavailable. This simple 2D fallback keeps the
-// visualizer usable on systems without WebGPU support.
-function positionFallbackLabels() {
-    const positions = {
-        'label-zero': [0.5, 0.02],
-        'label-one': [0.5, 0.98],
-        'label-plus': [0.98, 0.5],
-        'label-minus': [0.02, 0.5],
-        'label-i-plus': [0.5, 0.76],
-        'label-i-minus': [0.5, 0.24]
-    };
-    const rect = canvas.getBoundingClientRect();
-    for (const [id, [x, y]] of Object.entries(positions)) {
-        const label = document.getElementById(id);
-        if (!label) continue;
-        label.style.display = 'block';
-        label.style.transform = `translate(-50%, -50%) translate(${rect.width * x}px, ${rect.height * y}px)`;
-    }
-}
-
-// Draw a minimal full-size Bloch sphere and arrow with Canvas 2D.
-function drawFallbackBloch(screenVector) {
-    resizeCanvas();
-    const context = canvas.getContext('2d');
-    if (!context) return;
-
-    const width = canvas.width;
-    const height = canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radius = Math.min(width, height) * 0.38;
-    const [x, y] = screenVector || [0, 1];
-
-    context.clearRect(0, 0, width, height);
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-
-    context.strokeStyle = 'rgba(205, 205, 215, 0.72)';
-    context.lineWidth = Math.max(1, width / 320);
-    context.beginPath();
-    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    context.moveTo(centerX - radius, centerY);
-    context.lineTo(centerX + radius, centerY);
-    context.moveTo(centerX, centerY - radius);
-    context.lineTo(centerX, centerY + radius);
-    context.stroke();
-
-    const tipX = centerX + x * radius;
-    const tipY = centerY - y * radius;
-    const angle = Math.atan2(tipY - centerY, tipX - centerX);
-    context.strokeStyle = '#f0f0f0';
-    context.fillStyle = '#f0f0f0';
-    context.lineWidth = Math.max(2, width / 150);
-    context.beginPath();
-    context.moveTo(centerX, centerY);
-    context.lineTo(tipX, tipY);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(tipX, tipY);
-    context.lineTo(tipX - Math.cos(angle - 0.45) * width / 28, tipY - Math.sin(angle - 0.45) * width / 28);
-    context.lineTo(tipX - Math.cos(angle + 0.45) * width / 28, tipY - Math.sin(angle + 0.45) * width / 28);
-    context.closePath();
-    context.fill();
-
-    positionFallbackLabels();
-}
-
-// Convert the latest Q# result into the fallback arrow representation.
-function drawFallbackResult(result, targetQubit = 0) {
-    const arrowResult = computeBlochArrow(result, targetQubit);
-    drawFallbackBloch(arrowResult.screenVector);
-}
-
-// Draw one compact Bloch sphere for the fallback version of a qubit card.
-function drawMiniBlochSphere(canvasElement, screenVector, label) {
-    const context = canvasElement.getContext('2d');
-    if (!context) return;
-
-    const width = Math.max(72, canvasElement.width || 96);
-    const height = Math.max(72, canvasElement.height || 96);
-    canvasElement.width = width;
-    canvasElement.height = height;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radius = Math.min(width, height) * 0.32;
-    const [x, y, z] = screenVector || [0, 1, 0];
-
-    context.clearRect(0, 0, width, height);
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-
-    context.save();
-    context.translate(centerX + 2, centerY + 5);
-    context.beginPath();
-    context.ellipse(0, 0, radius * 0.96, radius * 0.74, 0, 0, Math.PI * 2);
-    context.fillStyle = 'rgba(0, 0, 0, 0.18)';
-    context.fill();
-    context.restore();
-
-    const sphereGradient = context.createRadialGradient(
-        centerX - radius * 0.28,
-        centerY - radius * 0.32,
-        radius * 0.1,
-        centerX,
-        centerY,
-        radius
-    );
-    sphereGradient.addColorStop(0, '#f8f8ff');
-    sphereGradient.addColorStop(0.45, '#a9bde7');
-    sphereGradient.addColorStop(1, '#4a63a8');
-
-    context.beginPath();
-    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
-    context.fillStyle = sphereGradient;
-    context.fill();
-
-    context.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-    context.lineWidth = 1.2;
-    context.stroke();
-
-    context.beginPath();
-    context.arc(centerX - radius * 0.24, centerY - radius * 0.24, radius * 0.24, 0.2, 2.1);
-    context.strokeStyle = 'rgba(255, 255, 255, 0.34)';
-    context.lineWidth = 1.3;
-    context.stroke();
-
-    const tipX = centerX + x * radius * 0.78;
-    const tipY = centerY - z * radius * 0.78;
-    const angle = Math.atan2(tipY - centerY, tipX - centerX);
-    context.strokeStyle = '#f8f9ff';
-    context.fillStyle = '#f8f9ff';
-    context.lineWidth = 1.7;
-    context.beginPath();
-    context.moveTo(centerX, centerY);
-    context.lineTo(tipX, tipY);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(tipX, tipY);
-    context.lineTo(tipX - Math.cos(angle - 0.48) * width / 18, tipY - Math.sin(angle - 0.48) * width / 18);
-    context.lineTo(tipX - Math.cos(angle + 0.48) * width / 18, tipY - Math.sin(angle + 0.48) * width / 18);
-    context.closePath();
-    context.fill();
-
-    context.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-    context.lineWidth = 0.9;
-    context.beginPath();
-    context.moveTo(centerX - radius * 0.68, centerY);
-    context.lineTo(centerX + radius * 0.68, centerY);
-    context.moveTo(centerX, centerY - radius * 0.68);
-    context.lineTo(centerX, centerY + radius * 0.68);
-    context.stroke();
-
-    context.fillStyle = '#d9d9e3';
-    context.font = '10px sans-serif';
-    context.textAlign = 'center';
-    context.fillText(label || '', centerX, height - 8);
-}
-
-// Create the visible Bloch card DOM for every declared qubit. WebGPU renderers
-// are attached afterward, while fallback mode paints each canvas immediately.
-function renderQubitColumn(result) {
-    const column = document.getElementById('qubit-column');
-    if (!column) return;
-
-    const qubitsList = result?.qubitsList || [];
-    const count = Math.max(qubitsList.length, result?.qubitsDeclared || 0);
-    currentQubitsList = qubitsList;
-    column.innerHTML = '';
-
-    for (let i = 0; i < count; i++) {
-        const card = document.createElement('div');
-        card.className = 'qubit-mini';
-
-        const label = document.createElement('div');
-        label.className = 'qubit-mini-label';
-        label.textContent = `Qubit ${i}`;
-
-        const canvas = document.createElement('canvas');
-        canvas.className = 'qubit-mini-canvas';
-        canvas.width = qubitSphereSize;
-        canvas.height = qubitSphereSize;
-
-        card.appendChild(label);
-        createQubitSphereStage(card, canvas);
-        column.appendChild(card);
-
-        const arrowResult = computeBlochArrow(result, i);
-        drawMiniBlochSphere(canvas, arrowResult.screenVector, qubitsList[i] || `q${i}`);
-    }
-}
-
-// Release GPU resources belonging to old mini renderers before rebuilding cards.
-function destroyMiniRenderers() {
-    for (const renderer of miniRenderers) {
-        renderer.uniformBuffer?.destroy();
-        renderer.arrowVertexBuffer?.destroy();
-    }
-    miniRenderers = [];
-}
-
-// Create the WebGPU resources and pointer handlers for one qubit card.
-async function createMiniRenderer(canvasElement, result, qubitIndex, state, previousVector, previousRotation) {
-    const context = canvasElement.getContext('webgpu');
-    if (!context) return null;
-
-    const format = state.format;
-    context.configure({ device: state.device, format, alphaMode: 'premultiplied' });
-
-    const aspect = canvasElement.width / canvasElement.height;
-    const projMatrix = mult(
-        createPerspectiveMatrix(Math.PI / 4, aspect, 0.1, 100),
-        createTranslationMatrix(0, 0, -3)
-    );
-    const modelMatrix = rotateMatrix(0.35, -0.65, 0, projMatrix);
-    const uniformBuffer = state.device.createBuffer({
-        label: `Qubit ${qubitIndex} Uniform Buffer`,
-        size: modelMatrix.byteLength,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-    });
-    state.device.queue.writeBuffer(uniformBuffer, 0, modelMatrix);
-
-    const bindGroup = state.device.createBindGroup({
-        layout: state.bindGroupLayout,
-        entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
-    });
-
-    const arrowResult = computeBlochArrow(result, qubitIndex);
-    const arrowVertices = arrowResult.vertices;
-    const stepVectors = arrowResult.stepVectors || [];
-    const finalVector = arrowResult.screenVector || [0, 1, 0];
-    const currentVector = previousVector || stepVectors[0] || finalVector;
-    const targetVector = previousVector ? finalVector : (stepVectors[0] || finalVector);
-    const stepQueue = previousVector ? [] : stepVectors.slice(1);
-    const arrowVertexBuffer = state.device.createBuffer({
-        label: `Qubit ${qubitIndex} Arrow Buffer`,
-        size: Math.max(arrowVertices.byteLength, 64 * 1024),
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    if (arrowVertices.byteLength > 0) {
-        state.device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
-    }
-
-    const rotation = previousRotation ? [...previousRotation] : [0.3, 0.0, 0.0];
-    let dragging = false;
-    let previousX = 0;
-    canvasElement.addEventListener('mousedown', event => {
-        dragging = true;
-        previousX = event.clientX;
-    });
-    canvasElement.addEventListener('mousemove', event => {
-        if (!dragging) return;
-        rotation[1] += (event.clientX - previousX) * 0.005;
-        previousX = event.clientX;
-    });
-    canvasElement.addEventListener('mouseup', () => { dragging = false; });
-    canvasElement.addEventListener('mouseleave', () => { dragging = false; });
-
-    const renderer = {
-        canvas: canvasElement,
-        stage: canvasElement.parentElement,
-        labels: [...canvasElement.parentElement.querySelectorAll('.qubit-bloch-label')],
-        device: state.device,
-        context,
-        bindGroup,
-        uniformBuffer,
-        arrowVertexBuffer,
-        arrowVertexCount: arrowVertices.length / 6,
-        arrowVector: arrowResult.screenVector,
-        currentVector: [...currentVector],
-        targetVector: [...targetVector],
-        stepQueue,
-        projMatrix,
-        rotation,
-        qubitIndex,
-        hoverInfo: null
-    };
-
-    try {
-        const hoverInfo = document.createElement('div');
-        hoverInfo.className = 'qubit-hover-info';
-        hoverInfo.hidden = true;
-        renderer.stage.appendChild(hoverInfo);
-        renderer.hoverInfo = hoverInfo;
-
-        canvasElement.addEventListener('mousemove', event => {
-            updateArrowHover(renderer, event);
-        });
-        canvasElement.addEventListener('mouseleave', () => {
-            renderer.hoverInfo.hidden = true;
-        });
-    } catch (error) {
-        console.warn('Arrow hover information unavailable:', error);
-    }
-
-    return renderer;
-}
-
-// Advance one mini arrow toward its next captured state and submit its render pass.
-function renderMiniRenderer(renderer, state) {
-    const current = renderer.currentVector;
-    const target = renderer.targetVector;
-    if (!vectorsClose(current, target)) {
-        const nextVector = interpolateVector(current, target, 0.25);
-        renderer.currentVector = vectorsClose(nextVector, target) ? [...target] : nextVector;
-        const arrowVertices = buildArrowVertices(nextVector);
-        if (arrowVertices.byteLength > 0) {
-            renderer.device.queue.writeBuffer(renderer.arrowVertexBuffer, 0, arrowVertices);
-        }
-        renderer.arrowVertexCount = arrowVertices.length / 6;
-    } else if (renderer.stepQueue.length > 0) {
-        renderer.targetVector = renderer.stepQueue.shift();
-    }
-
-    const modelMatrix = rotateMatrix(...renderer.rotation, renderer.projMatrix);
-    renderer.device.queue.writeBuffer(renderer.uniformBuffer, 0, modelMatrix);
-    updateMiniLabels(renderer, modelMatrix);
-
-    const commandEncoder = renderer.device.createCommandEncoder();
-    const passEncoder = commandEncoder.beginRenderPass({
-        colorAttachments: [{
-            view: renderer.context.getCurrentTexture().createView(),
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp: 'clear',
-            storeOp: 'store'
-        }]
-    });
-
-    passEncoder.setBindGroup(0, renderer.bindGroup);
-    passEncoder.setPipeline(state.pipeline);
-    passEncoder.setVertexBuffer(0, state.vertexBuffer);
-    passEncoder.draw(state.vertexCount);
-
-    passEncoder.setPipeline(state.linePipeline);
-    passEncoder.setVertexBuffer(0, state.lineVertexBuffer);
-    passEncoder.draw(state.lineVertexCount);
-
-    if (renderer.arrowVertexCount > 0) {
-        passEncoder.setPipeline(state.arrowPipeline);
-        passEncoder.setVertexBuffer(0, renderer.arrowVertexBuffer);
-        passEncoder.draw(renderer.arrowVertexCount);
-    }
-
-    passEncoder.end();
-    renderer.device.queue.submit([commandEncoder.finish()]);
-}
-
-// Project the six Bloch basis labels into the mini canvas and hide labels behind
-// the camera when their projected point is unavailable.
-function updateMiniLabels(renderer, modelMatrix) {
-    const width = renderer.stage.clientWidth;
-    const height = renderer.stage.clientHeight;
-    for (let i = 0; i < blochLabelDefs.length; i++) {
-        const label = renderer.labels[i];
-        if (!label) continue;
-        const point = projectPoint(blochLabelDefs[i].pos, modelMatrix, width, height);
-        if (point) {
-            label.style.transform = `translate(-50%, -50%) translate(${point[0]}px, ${point[1]}px)`;
-            label.style.display = 'block';
-        } else {
-            label.style.display = 'none';
-        }
-    }
-}
-
-// Upgrade all cards from fallback canvases to independent WebGPU renderers while
-// preserving each card's current vector and rotation where possible.
-async function renderMiniQubitColumn(result) {
-    if (!webgpuState) return;
-    const previousVectors = miniRenderers.map(renderer => renderer.currentVector);
-    const previousRotations = miniRenderers.map(renderer => renderer.rotation);
-    destroyMiniRenderers();
-    const canvases = [...document.querySelectorAll('.qubit-mini-canvas')];
-    miniRenderers = (await Promise.all(
-        canvases.map((canvasElement, index) =>
-            createMiniRenderer(
-                canvasElement,
-                result,
-                index,
-                webgpuState,
-                previousVectors[index],
-                previousRotations[index]
-            )
-        )
-    )).filter(Boolean);
-}
-
-// Return the shortest distance from a 2D point to a line segment.
 function distanceToSegment(point, start, end) {
     const dx = end[0] - start[0];
     const dy = end[1] - start[1];
@@ -682,8 +537,6 @@ function distanceToSegment(point, start, end) {
     );
 }
 
-// Display probability and phase information when the pointer is close to the
-// projected arrow segment, rather than anywhere inside the canvas.
 function updateArrowHover(renderer, event) {
     if (!renderer.hoverInfo) return;
 
@@ -691,7 +544,7 @@ function updateArrowHover(renderer, event) {
     const height = renderer.stage.clientHeight;
     const rect = renderer.canvas.getBoundingClientRect();
     const point = [event.clientX - rect.left, event.clientY - rect.top];
-    const modelMatrix = rotateMatrix(...renderer.rotation, renderer.projMatrix);
+    const modelMatrix = rotateMatrix(...renderer.rotation, renderer._projMatrix);
     const start = projectPoint([0, 0, 0], modelMatrix, width, height);
     const end = projectPoint(renderer.currentVector, modelMatrix, width, height);
 
@@ -719,7 +572,175 @@ function updateArrowHover(renderer, event) {
     renderer.hoverInfo.hidden = false;
 }
 
-// Reset every renderer to its first captured vector and queue the remaining frames.
+function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, previousRotation) {
+    const miniRenderer = new THREE.WebGLRenderer({
+        canvas: canvasElement,
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: true
+    });
+    miniRenderer.setClearColor(0x000000, 0);
+    miniRenderer.setPixelRatio(window.devicePixelRatio || 1);
+    miniRenderer.setSize(canvasElement.clientWidth || qubitSphereSize, canvasElement.clientHeight || qubitSphereSize, false);
+
+    const scene = new THREE.Scene();
+    const aspect = (canvasElement.clientWidth || qubitSphereSize) / (canvasElement.clientHeight || qubitSphereSize);
+    const camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+    camera.position.set(0, 0, 3);
+    camera.lookAt(0, 0, 0);
+
+    const sphereMaterial = createSphereMaterial();
+    const lineMaterial = createLineMaterial();
+    const arrowMaterial = createArrowMaterial();
+
+    const sphereGeo = new THREE.SphereGeometry(1, 32, 32);
+    scene.add(new THREE.Mesh(sphereGeo, sphereMaterial));
+    scene.add(createSphereWireframe(lineMaterial));
+
+    const arrowResult = computeBlochArrow(result, qubitIndex);
+    const stepVectors = arrowResult.stepVectors || [];
+    const finalVector = arrowResult.screenVector || [0, 1, 0];
+    const currentVector = previousVector || stepVectors[0] || finalVector;
+    const targetVector = previousVector ? finalVector : (stepVectors[0] || finalVector);
+    const stepQueue = previousVector ? [] : stepVectors.slice(1);
+
+    const arrowGroup = new THREE.Group();
+    const initialArrow = createArrowMesh(currentVector, arrowMaterial);
+    arrowGroup.add(initialArrow);
+    scene.add(arrowGroup);
+
+    const rotation = previousRotation ? [...previousRotation] : [0.3, 0.0, 0.0];
+    let dragging = false;
+    let previousX = 0;
+    canvasElement.addEventListener('mousedown', event => {
+        dragging = true;
+        previousX = event.clientX;
+    });
+    canvasElement.addEventListener('mousemove', event => {
+        if (!dragging) return;
+        rotation[1] += (event.clientX - previousX) * 0.005;
+        previousX = event.clientX;
+    });
+    canvasElement.addEventListener('mouseup', () => { dragging = false; });
+    canvasElement.addEventListener('mouseleave', () => { dragging = false; });
+
+    const projMatrix = mult(
+        createPerspectiveMatrix(Math.PI / 4, aspect, 0.1, 100),
+        createTranslationMatrix(0, 0, -3)
+    );
+
+    const rendererObj = {
+        canvas: canvasElement,
+        stage: canvasElement.parentElement,
+        labels: [...canvasElement.parentElement.querySelectorAll('.qubit-bloch-label')],
+        threeRenderer: miniRenderer,
+        scene,
+        camera,
+        arrowGroup,
+        arrowMaterial,
+        sphereMaterial,
+        lineMaterial,
+        currentVector: [...currentVector],
+        targetVector: [...targetVector],
+        stepQueue,
+        rotation,
+        qubitIndex,
+        hoverInfo: null,
+        arrowVector: arrowResult.screenVector,
+        _projMatrix: projMatrix
+    };
+
+    try {
+        const hoverInfo = document.createElement('div');
+        hoverInfo.className = 'qubit-hover-info';
+        hoverInfo.hidden = true;
+        rendererObj.stage.appendChild(hoverInfo);
+        rendererObj.hoverInfo = hoverInfo;
+
+        canvasElement.addEventListener('mousemove', event => {
+            updateArrowHover(rendererObj, event);
+        });
+        canvasElement.addEventListener('mouseleave', () => {
+            rendererObj.hoverInfo.hidden = true;
+        });
+    } catch (error) {
+        console.warn('Arrow hover information unavailable:', error);
+    }
+
+    return rendererObj;
+}
+
+function renderMiniRenderer(renderer) {
+    if (!renderer.threeRenderer) return;
+    const current = renderer.currentVector;
+    const target = renderer.targetVector;
+    if (!vectorsClose(current, target)) {
+        const nextVector = interpolateVector(current, target, 0.25);
+        renderer.currentVector = vectorsClose(nextVector, target) ? [...target] : nextVector;
+
+        while (renderer.arrowGroup.children.length > 0) {
+            const c = renderer.arrowGroup.children[0];
+            renderer.arrowGroup.remove(c);
+            if (c.traverse) {
+                c.traverse(obj => {
+                    if (obj.geometry) obj.geometry.dispose();
+                });
+            }
+        }
+        renderer.arrowGroup.add(createArrowMesh(renderer.currentVector, renderer.arrowMaterial));
+    } else if (renderer.stepQueue && renderer.stepQueue.length > 0) {
+        renderer.targetVector = renderer.stepQueue.shift();
+    }
+
+    renderer.scene.rotation.set(renderer.rotation[0], renderer.rotation[1], renderer.rotation[2]);
+    updateMiniLabels(renderer, rotateMatrix(...renderer.rotation, renderer._projMatrix));
+
+    try {
+        renderer.threeRenderer.render(renderer.scene, renderer.camera);
+    } catch (e) {
+        // Suppress transient render errors
+    }
+}
+
+function updateMiniLabels(renderer, modelMatrix) {
+    const width = renderer.stage.clientWidth;
+    const height = renderer.stage.clientHeight;
+    for (let i = 0; i < blochLabelDefs.length; i++) {
+        const label = renderer.labels[i];
+        if (!label) continue;
+        const point = projectPoint(blochLabelDefs[i].pos, modelMatrix, width, height);
+        if (point) {
+            label.style.transform = `translate(-50%, -50%) translate(${point[0]}px, ${point[1]}px)`;
+            label.style.display = 'block';
+        } else {
+            label.style.display = 'none';
+        }
+    }
+}
+
+function destroyMiniRenderers() {
+    for (const renderer of miniRenderers) {
+        if (renderer.threeRenderer) {
+            try {
+                renderer.threeRenderer.forceContextLoss();
+                renderer.threeRenderer.dispose();
+            } catch (e) {
+                console.warn('Error disposing mini renderer:', e);
+            }
+        }
+        if (renderer.scene) {
+            renderer.scene.traverse(obj => {
+                if (obj.geometry) obj.geometry.dispose();
+                if (obj.material) {
+                    if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                    else obj.material.dispose();
+                }
+            });
+        }
+    }
+    miniRenderers = [];
+}
+
 function replayAnimation() {
     if (!lastParsedResult) return;
 
@@ -730,33 +751,28 @@ function replayAnimation() {
         renderer.currentVector = [...firstVector];
         renderer.targetVector = [...firstVector];
         renderer.stepQueue = (arrowResult.stepVectors || []).slice(1);
-        const vertices = buildArrowVertices(firstVector);
-        renderer.arrowVertexCount = vertices.length / 6;
-        if (vertices.byteLength > 0) {
-            renderer.device.queue.writeBuffer(renderer.arrowVertexBuffer, 0, vertices);
-        }
-    }
 
-    if (webgpuState) {
-        const firstVector = webgpuState.stepVectors?.[0] || webgpuState.targetVector || [0, 1, 0];
-        webgpuState.currentVector = [...firstVector];
-        webgpuState.targetVector = [...firstVector];
-        webgpuState.stepQueue = (webgpuState.stepVectors || []).slice(1);
-        const vertices = buildArrowVertices(firstVector);
-        webgpuState.arrowVertexCount = vertices.length / 6;
-        if (vertices.byteLength > 0) {
-            webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, vertices);
+        while (renderer.arrowGroup.children.length > 0) {
+            const c = renderer.arrowGroup.children[0];
+            renderer.arrowGroup.remove(c);
+            if (c.traverse) c.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); });
         }
+        renderer.arrowGroup.add(createArrowMesh(firstVector, renderer.arrowMaterial));
     }
 }
 
-// Initialize WebGPU, compile all shaders, create pipelines, and allocate buffers
-// shared by the full-size Q-sphere and mini Bloch renderers.
-async function initWebGPU() {
+let pendingCode = null;
+
+function renderScene() {
+    if (!threeState) return;
+    threeState.renderer.render(threeState.scene, threeState.camera);
+}
+
+async function initScene() {
     let initialArrowData = null;
     let initialQubits = 0;
     const testQsUri = canvas.dataset.testQs || 'test.qs';
-    
+
     if (pendingCode) {
         try {
             const result = await parseQSharp(pendingCode);
@@ -788,348 +804,33 @@ async function initWebGPU() {
 
     updateVisibility(initialQubits);
 
-    if (!navigator.gpu) {
-        fallbackMode = true;
-        drawFallbackBloch(initialArrowData.screenVector);
-        setStatus('WebGPU is not available; using 2D fallback.');
-        return undefined;
-    }
-
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter) {
-        fallbackMode = true;
-        drawFallbackBloch(initialArrowData.screenVector);
-        setStatus('No WebGPU adapter; using 2D fallback.');
-        return undefined;
-    }
-
-    const device = await adapter.requestDevice();
-    const context = canvas.getContext('webgpu');
-    const format = navigator.gpu.getPreferredCanvasFormat();
-
-    const mesh = sphere(32, 32);
-
-    const vertexBuffer = device.createBuffer({
-        label: "Vertex Buffer",
-        size: mesh.positions.byteLength,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-
-    const vertexCount = mesh.positions.length / 6;
-
-    device.queue.writeBuffer(vertexBuffer, 0, mesh.positions);
-
-    resizeCanvas();
-
-    function buildProjMatrix() {
-        return mult(
-            createPerspectiveMatrix(Math.PI / 4, canvas.width / canvas.height, 0.1, 100),
-            createTranslationMatrix(0, 0, -3)
-        );
-    }
-
-    const projMatrix = buildProjMatrix();
-
-    const modelMatrix = rotateMatrix(...rotationAngles, projMatrix);
-
-    const vertexUniformBuffer = device.createBuffer({
-        size: modelMatrix.byteLength,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    device.queue.writeBuffer(vertexUniformBuffer, 0, modelMatrix);
-
-    const bindGroupLayout = device.createBindGroupLayout({
-        entries: [
-            {
-                binding: 0,
-                visibility: GPUShaderStage.VERTEX,
-                buffer: {
-                    type: 'uniform',
-                },
-            },
-        ],
-    });
-
-    const bindGroup = device.createBindGroup({
-        layout: bindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: {
-                    buffer: vertexUniformBuffer,
-                },
-            },
-        ],
-    });
-
-    const vertexShaderUri = canvas.dataset.vertexShader || 'shader/vertex.wgsl';
-    const fragmentShaderUri = canvas.dataset.fragmentShader || 'shader/fragment.wgsl';
-    const arrowShaderUri = canvas.dataset.arrowShader || 'shader/fragment_arrow.wgsl';
-    const linesShaderUri = canvas.dataset.linesShader || 'shader/fragment_lines.wgsl';
-    const qnodesShaderUri = canvas.dataset.qnodesShader || 'shader/fragment_qnodes.wgsl';
-    const qnodesVertexShaderUri = canvas.dataset.qnodesVertexShader || 'shader/qnodes_vertex.wgsl';
-
-    const [vertexShader, fragmentShader, arrowFragShader, linesFragShader, qnodesFragShader, qnodesVertexShader] = await Promise.all([
-        loadShader(vertexShaderUri),
-        loadShader(fragmentShaderUri),
-        loadShader(arrowShaderUri),
-        loadShader(linesShaderUri),
-        loadShader(qnodesShaderUri),
-        loadShader(qnodesVertexShaderUri)
-    ]);
-
-    const vertexModule = device.createShaderModule({ code: vertexShader });
-    const fragmentModule = device.createShaderModule({ code: fragmentShader });
-    const arrowFragModule = device.createShaderModule({ code: arrowFragShader });
-    const linesFragModule = device.createShaderModule({ code: linesFragShader });
-    const qnodesFragModule = device.createShaderModule({ code: qnodesFragShader });
-    const qnodesVertexModule = device.createShaderModule({ code: qnodesVertexShader });
-
-
-    const vertexBufferLayout = {
-        arrayStride: Float32Array.BYTES_PER_ELEMENT * 6,
-        attributes: [
-            {
-                shaderLocation: 0,
-                offset: 0,
-                format: 'float32x3'
-            },
-            {
-                shaderLocation: 1,
-                offset: Float32Array.BYTES_PER_ELEMENT * 3,
-                format: 'float32x3'
-            }
-        ]
-    };
-    const qnodeVertexBufferLayout = {
-        arrayStride: Float32Array.BYTES_PER_ELEMENT * 7,
-        attributes: [
-            {
-                shaderLocation: 0,
-                offset: 0,
-                format: 'float32x3'
-            },
-            {
-                shaderLocation: 1,
-                offset: Float32Array.BYTES_PER_ELEMENT * 3,
-                format: 'float32x4'
-            }
-        ]
-    };
-
-    const pipelineLayout = device.createPipelineLayout({
-        bindGroupLayouts: [bindGroupLayout]
-    });
-
-
-    const blendState = {
-        color: {
-            srcFactor: 'src-alpha',
-            dstFactor: 'one-minus-src-alpha',
-            operation: 'add',
-        },
-        alpha: {
-            srcFactor: 'one',
-            dstFactor: 'one-minus-src-alpha',
-            operation: 'add',
-        },
-    };
-
-
-    const pipeline = device.createRenderPipeline({
-        layout: pipelineLayout,
-        vertex: {
-            module: vertexModule,
-            entryPoint: 'main',
-            buffers: [vertexBufferLayout]
-        },
-        fragment: {
-            module: fragmentModule,
-            entryPoint: 'main',
-            targets: [{ format, blend: blendState }]
-        },
-        primitive: { topology: 'triangle-list' }
-    });
-
-
-    const arrowPipeline = device.createRenderPipeline({
-        layout: pipelineLayout,
-        vertex: {
-            module: vertexModule,
-            entryPoint: 'main',
-            buffers: [vertexBufferLayout]
-        },
-        fragment: {
-            module: arrowFragModule,
-            entryPoint: 'main',
-            targets: [{ format, blend: blendState }]
-        },
-        primitive: { topology: 'triangle-list' }
-    });
-
-    const linePipeline = device.createRenderPipeline({
-        layout: pipelineLayout,
-        vertex: {
-            module: vertexModule,
-            entryPoint: 'main',
-            buffers: [vertexBufferLayout]
-        },
-        fragment: {
-            module: linesFragModule,
-            entryPoint: 'main',
-            targets: [{ format, blend: blendState }]
-        },
-        primitive: { topology: 'line-list' }
-    });
-
-    const qnodePipeline = device.createRenderPipeline({
-        layout: pipelineLayout,
-        vertex: {
-            module: qnodesVertexModule,
-            entryPoint: 'main',
-            buffers: [qnodeVertexBufferLayout]
-        },
-        fragment: {
-            module: qnodesFragModule,
-            entryPoint: 'main',
-            targets: [{ format, blend: blendState }]
-        },
-        primitive: { topology: 'triangle-list' }
-    });
-
-    const spokePipeline = device.createRenderPipeline({
-        layout: pipelineLayout,
-        vertex: {
-            module: qnodesVertexModule,
-            entryPoint: 'main',
-            buffers: [qnodeVertexBufferLayout]
-        },
-        fragment: {
-            module: qnodesFragModule,
-            entryPoint: 'main',
-            targets: [{ format, blend: blendState }]
-        },
-        primitive: { topology: 'triangle-list' }
-    });
-
-    const lineVertices = buildSphereLines();
-    const lineVertexBuffer = device.createBuffer({
-        label: 'Line Vertex Buffer',
-        size: Math.max(lineVertices.byteLength, 4 * 1024 * 1024),
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    const lineVertexCount = lineVertices.length / 6;
-    device.queue.writeBuffer(lineVertexBuffer, 0, lineVertices);
-
-
-    const arrowVertices = initialArrowData.vertices;
-    const arrowVertexBuffer = device.createBuffer({
-        label: 'Arrow Vertex Buffer',
-        size: Math.max(arrowVertices.byteLength, 512 * 1024),
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    const arrowVertexCount = arrowVertices.length / 6;
-    if (arrowVertices.byteLength > 0) {
-        device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
-    }
-
-    const qnodeVertexBuffer = device.createBuffer({
-        label: 'QNode Vertex Buffer',
-        size: 4 * 1024 * 1024,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    let qnodeVertexCount = 0;
-
-    const qsphereLineVertexBuffer = device.createBuffer({
-        label: 'Q-sphere Line Vertex Buffer',
-        size: 4 * 1024 * 1024,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    let qsphereLineVertexCount = 0;
-    const qsphereSpokeVertexBuffer = device.createBuffer({
-        label: 'Q-sphere Spoke Vertex Buffer',
-        size: 4 * 1024 * 1024,
-        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-    });
-    let qsphereSpokeVertexCount = 0;
-
-    resizeCanvas();
-
-    context.configure({
-        device,
-        format,
-        alphaMode: 'premultiplied'
-    });
+    const state = initThreeRenderer();
 
     const initialScreenVec = initialArrowData.screenVector || [0, 1, 0];
-    const currentVector = [initialScreenVec[0], initialScreenVec[1], initialScreenVec[2]];
-    const targetVector = [initialScreenVec[0], initialScreenVec[1], initialScreenVec[2]];
-    const stepVectors = initialArrowData.stepVectors || [];
+    state._currentVector = [...initialScreenVec];
+    state._targetVector = [...initialScreenVec];
+    state._stepVectors = initialArrowData.stepVectors || [];
+    state._stepQueue = [];
+    state._qsphereHoveredIndex = null;
+    state._qsphereData = null;
 
-    return {
-        device, context, pipeline, vertexBuffer, vertexCount,
-        bindGroup, bindGroupLayout, vertexUniformBuffer, projMatrix, buildProjMatrix, format,
-        arrowPipeline, arrowVertexBuffer, arrowVertexCount,
-        linePipeline, lineVertexBuffer, lineVertexCount,
-        qnodePipeline, qnodeVertexBuffer, qnodeVertexCount,
-        spokePipeline, qsphereLineVertexBuffer, qsphereLineVertexCount,
-        qsphereSpokeVertexBuffer, qsphereSpokeVertexCount,
-        currentVector, targetVector, stepVectors, stepQueue: []
+    const projMatrix = mult(
+        createPerspectiveMatrix(Math.PI / 4, (canvas.clientWidth || 270) / (canvas.clientHeight || 270), 0.1, 100),
+        createTranslationMatrix(0, 0, -3)
+    );
+    state._projMatrix = projMatrix;
+    state._buildProjMatrix = function () {
+        return mult(
+            createPerspectiveMatrix(Math.PI / 4, (canvas.clientWidth || 270) / (canvas.clientHeight || 270), 0.1, 100),
+            createTranslationMatrix(0, 0, -3)
+        );
     };
+
+    updateSceneForMode();
+
+    return state;
 }
 
-// Submit one full-size render pass. Which geometry is drawn depends on the active
-// view: Q-sphere draws the sphere/rings/spokes/nodes; Bloch keeps this surface clear
-// because the visible Bloch cards render through their own passes.
-function render(state) {
-    if (!state) return;
-
-    const commandEncoder = state.device.createCommandEncoder();
-    const textureView = state.context.getCurrentTexture().createView();
-
-    const passEncoder = commandEncoder.beginRenderPass({
-        colorAttachments: [{
-            view: textureView,
-            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-            loadOp: 'clear',
-            storeOp: 'store'
-        }]
-    });
-
-    if (currentMode === 'qsphere') {
-        passEncoder.setPipeline(state.pipeline);
-        if (state.bindGroup) passEncoder.setBindGroup(0, state.bindGroup);
-        passEncoder.setVertexBuffer(0, state.vertexBuffer);
-        passEncoder.draw(state.vertexCount);
-
-        if (state.linePipeline && state.qsphereLineVertexBuffer && state.qsphereLineVertexCount > 0) {
-            passEncoder.setPipeline(state.linePipeline);
-            passEncoder.setBindGroup(0, state.bindGroup);
-            passEncoder.setVertexBuffer(0, state.qsphereLineVertexBuffer);
-            passEncoder.draw(state.qsphereLineVertexCount);
-        }
-
-        if (state.spokePipeline && state.qsphereSpokeVertexBuffer && state.qsphereSpokeVertexCount > 0) {
-            passEncoder.setPipeline(state.spokePipeline);
-            passEncoder.setBindGroup(0, state.bindGroup);
-            passEncoder.setVertexBuffer(0, state.qsphereSpokeVertexBuffer);
-            passEncoder.draw(state.qsphereSpokeVertexCount);
-        }
-        if (state.qnodePipeline && state.qnodeVertexBuffer && state.qnodeVertexCount > 0) {
-            passEncoder.setPipeline(state.qnodePipeline);
-            passEncoder.setBindGroup(0, state.bindGroup);
-            passEncoder.setVertexBuffer(0, state.qnodeVertexBuffer);
-            passEncoder.draw(state.qnodeVertexCount);
-        }
-    }
-
-    passEncoder.end();
-    state.device.queue.submit([commandEncoder.finish()]);
-}
-
-// Dragging the full-size canvas rotates the current view around the vertical axis.
-let webgpuState;
 let isDragging = false;
 let previousMousePosition = { x: 0, y: 0 };
 
@@ -1154,7 +855,6 @@ window.addEventListener('mouseup', () => {
     isDragging = false;
 });
 
-// Positions of the six standard Bloch labels in model space.
 const blochLabelDefs = [
     { id: 'label-zero', pos: [0, 1.15, 0] },
     { id: 'label-one', pos: [0, -1.15, 0] },
@@ -1164,7 +864,6 @@ const blochLabelDefs = [
     { id: 'label-i-minus', pos: [0, 0, -1.15] }
 ];
 
-// Project and position either Bloch labels or Q-sphere basis labels.
 function updateLabels(modelMatrix) {
     const rect = canvas.getBoundingClientRect();
     const w = rect.width;
@@ -1198,10 +897,8 @@ function updateLabels(modelMatrix) {
     }
 }
 
-// Recreate Q-sphere labels when the number of basis states changes.
 let _qsLabelData = [];
 
-// Place the existing Q-sphere labels after each rotation.
 function rebuildQsphereLabels(points, N) {
     const qsLabelsDiv = document.getElementById('qs-labels');
     if (!qsLabelsDiv) return;
@@ -1218,7 +915,6 @@ function rebuildQsphereLabels(points, N) {
     }
 }
 
-// Project all Q-sphere label positions into the canvas.
 function updateQsphereLabels(modelMatrix, w, h) {
     for (const item of _qsLabelData) {
         const pt = projectPoint(item.pos, modelMatrix, w, h);
@@ -1231,48 +927,29 @@ function updateQsphereLabels(modelMatrix, w, h) {
     }
 }
 
-// Main animation loop: interpolate arrows, update transforms, draw full-size and
-// mini views, then schedule the next frame.
 function frame() {
-    if (webgpuState) {
-        if (currentMode === 'bloch' && webgpuState.currentVector && webgpuState.targetVector) {
-            const cur = webgpuState.currentVector;
-            const tgt = webgpuState.targetVector;
-            if (!vectorsClose(cur, tgt)) {
-                const nextVec = interpolateVector(cur, tgt, 0.25);
-                webgpuState.currentVector = vectorsClose(nextVec, tgt) ? [...tgt] : nextVec;
-                const arrowVertices = buildArrowVertices(nextVec);
-                if (arrowVertices.byteLength > 0) {
-                    webgpuState.device.queue.writeBuffer(
-                        webgpuState.arrowVertexBuffer, 0, arrowVertices
-                    );
-                }
-                webgpuState.arrowVertexCount = arrowVertices.length / 6;
-            } else if (webgpuState.stepQueue && webgpuState.stepQueue.length > 0) {
-                webgpuState.targetVector = webgpuState.stepQueue.shift();
-            }
+    if (threeState) {
+        if (currentMode === 'qsphere') {
+            threeState.scene.rotation.set(rotationAngles[0], rotationAngles[1], rotationAngles[2]);
+            const modelMatrix = rotateMatrix(...rotationAngles, threeState._projMatrix);
+            updateLabels(modelMatrix);
+            try {
+                renderScene();
+            } catch (e) {}
         }
 
-        const modelMatrix = rotateMatrix(...rotationAngles, webgpuState.projMatrix);
-        webgpuState.device.queue.writeBuffer(webgpuState.vertexUniformBuffer, 0, modelMatrix);
-
-        updateLabels(modelMatrix);
-        render(webgpuState);
         for (const renderer of miniRenderers) {
-            renderMiniRenderer(renderer, webgpuState);
+            renderMiniRenderer(renderer);
         }
     }
     requestAnimationFrame(frame);
 }
 
-initWebGPU()
-
+initScene()
     .then(state => {
-        webgpuState = state;
+        threeState = state;
         if (lastParsedResult) {
-            populateQubitColumn(lastParsedResult).catch(error => {
-                console.error('Could not upgrade qubit spheres to WebGPU:', error);
-            });
+            populateQubitColumn(lastParsedResult);
         }
         if (vscode) {
             vscode.postMessage({ command: 'ready' });
@@ -1280,28 +957,20 @@ initWebGPU()
         requestAnimationFrame(frame);
     })
     .catch(error => {
-        console.error(error);
-        fallbackMode = true;
-        drawFallbackResult(lastParsedResult || { states: [] }, selectedQubitIndex);
-        if (lastParsedResult) {
-            populateQubitColumn(lastParsedResult).catch(populateError => {
-                console.error('Could not render fallback qubit spheres:', populateError);
-            });
-        }
-        setStatus('WebGPU setup failed.');
+        console.error('Three.js renderer setup failed:', error);
+        setStatus('Renderer setup failed.');
     });
 
-// Resize the shared surface and rebuild its projection when the panel size changes.
 window.addEventListener('resize', () => {
-    resizeCanvas();
-    if (webgpuState) {
-        webgpuState.projMatrix = webgpuState.buildProjMatrix();
-        render(webgpuState);
+    resizeRenderer(threeState);
+    if (threeState) {
+        threeState._projMatrix = threeState._buildProjMatrix();
+        try {
+            renderScene();
+        } catch (e) {}
     }
 });
 
-// Show one view's DOM and hide the other. The container is removed/reinserted to
-// prevent stale Q-sphere pixels from remaining behind Bloch cards.
 function updateVisibility(qubitsDeclared) {
     const container = qsphereContainer;
     const controls = controlsContainer;
@@ -1309,8 +978,6 @@ function updateVisibility(qubitsDeclared) {
     if (container) {
         const showQsphere = currentMode === 'qsphere';
         if (showQsphere && !container.parentElement) {
-            // Keep the legend after the sphere when the container is restored
-            // after switching back from the Bloch view.
             document.body.insertBefore(container, phaseLegend || controls || null);
         } else if (!showQsphere && container.parentElement) {
             container.remove();
@@ -1332,8 +999,7 @@ function updateVisibility(qubitsDeclared) {
     if (phaseLegend) phaseLegend.style.display = currentMode === 'qsphere' ? 'block' : 'none';
 }
 
-// Rebuild the Bloch card list from the latest parser result.
-async function populateQubitColumn(result) {
+function populateQubitColumn(result) {
     const column = document.getElementById('qubit-column');
     if (!column) return;
 
@@ -1341,7 +1007,27 @@ async function populateQubitColumn(result) {
     const count = Math.max(qubitsList.length, result?.qubitsDeclared || 0);
     currentQubitsList = qubitsList;
 
+    // Fast-path: If the qubit count hasn't changed, reuse the active WebGL contexts in place!
+    if (miniRenderers.length === count && count > 0) {
+        for (let i = 0; i < count; i++) {
+            const renderer = miniRenderers[i];
+            const arrowResult = computeBlochArrow(result, i);
+            renderer.targetVector = arrowResult.screenVector || [0, 1, 0];
+            renderer.stepQueue = (arrowResult.stepVectors || []).slice(1);
+            renderer.arrowVector = arrowResult.screenVector;
+            const card = column.children[i];
+            if (card) {
+                const label = card.querySelector('.qubit-mini-label');
+                if (label) label.textContent = `Qubit ${i}`;
+            }
+        }
+        return;
+    }
+
+    // Qubit count actually changed: destroy old WebGL contexts properly and rebuild
+    destroyMiniRenderers();
     column.innerHTML = '';
+
     for (let i = 0; i < count; i++) {
         const card = document.createElement('div');
         card.className = 'qubit-mini';
@@ -1350,19 +1036,14 @@ async function populateQubitColumn(result) {
         label.className = 'qubit-mini-label';
         label.textContent = `Qubit ${i}`;
 
-        const canvas = document.createElement('canvas');
-        canvas.className = 'qubit-mini-canvas';
-        canvas.width = qubitSphereSize;
-        canvas.height = qubitSphereSize;
+        const miniCanvas = document.createElement('canvas');
+        miniCanvas.className = 'qubit-mini-canvas';
+        miniCanvas.width = qubitSphereSize;
+        miniCanvas.height = qubitSphereSize;
 
         card.appendChild(label);
-        createQubitSphereStage(card, canvas);
+        createQubitSphereStage(card, miniCanvas);
         column.appendChild(card);
-
-        if (fallbackMode) {
-            const arrowResult = computeBlochArrow(result, i);
-            drawMiniBlochSphere(canvas, arrowResult.screenVector, qubitsList[i] || `q${i}`);
-        }
     }
 
     if (count > 0) {
@@ -1370,10 +1051,12 @@ async function populateQubitColumn(result) {
         selectedQubitName = currentQubitsList[selectedQubitIndex] || null;
     }
 
-    await renderMiniQubitColumn(result);
+    const canvases = [...column.querySelectorAll('.qubit-mini-canvas')];
+    miniRenderers = canvases.map((canvasElement, index) =>
+        createMiniRenderer(canvasElement, result, index)
+    ).filter(Boolean);
 }
 
-// Ignore stale source messages if an older Q# parse finishes after a newer edit.
 let currentTargetOp = null;
 let sourceUpdateGeneration = 0;
 
@@ -1396,24 +1079,18 @@ window.addEventListener('message', async event => {
             lastParsedResult = result;
 
             updateVisibility(result.qubitsDeclared);
-            await populateQubitColumn(result);
+            populateQubitColumn(result);
 
-            if (webgpuState) {
+            if (threeState) {
                 if (currentMode === 'qsphere') {
-                    updateQsphereState(result);
-                } else {
-                    const arrowResult = computeBlochArrow(result, selectedQubitIndex);
-                    webgpuState.stepVectors = arrowResult.stepVectors || [];
-                    webgpuState.targetVector = arrowResult.screenVector;
-                    webgpuState.stepQueue = [];
+                    updateQsphereScene(result);
                 }
-            } else if (fallbackMode) {
-                drawFallbackResult(result, selectedQubitIndex);
             }
         }
-        if (webgpuState) {
-            render(webgpuState);
+        if (threeState && currentMode === 'qsphere') {
+            try {
+                renderScene();
+            } catch (e) {}
         }
     }
 });
-

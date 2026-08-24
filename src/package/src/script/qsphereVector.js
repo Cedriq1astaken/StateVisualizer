@@ -1,8 +1,4 @@
-// Q-sphere geometry and phase-color mapping.
-// A Q-sphere places each computational basis state on a latitude determined by
-// Hamming weight; amplitude magnitude controls node size and phase controls color.
 
-// Count the number of one bits in a computational-basis index.
 function hammingWeight(n) {
     let count = 0;
     while (n > 0) {
@@ -12,7 +8,6 @@ function hammingWeight(n) {
     return count;
 }
 
-// Convert an HSL color into normalized RGB components for WebGPU and Canvas 2D.
 function hslToRgb(h, s, l) {
     s /= 100;
     l /= 100;
@@ -22,15 +17,11 @@ function hslToRgb(h, s, l) {
     return [f(0), f(8), f(4)];
 }
 
-// The phase mapping is shared by Q-sphere nodes, spokes, and the legend so the
-// same phase always appears with the same pastel color.
 function phaseToRgb(phase) {
     const deg = ((phase / (2 * Math.PI)) * 360 + 360) % 360;
     return hslToRgb(deg, 68, 68);
 }
 
-// Select the latest full-system snapshot and provide a zero-filled fallback when
-// the parser has not produced a state yet.
 function computeQsphereState(result) {
     const states = result?.states || [];
     const latest = states.length > 0 ? states[states.length - 1] : null;
@@ -42,8 +33,6 @@ function computeQsphereState(result) {
     return { state, N };
 }
 
-// Arrange basis states by Hamming weight. States with the same weight share a
-// latitude and are evenly distributed around that latitude.
 function computeQspherePoints(N) {
     const size = 2 ** N;
     const byWeight = Array.from({ length: N + 1 }, () => []);
@@ -66,8 +55,6 @@ function computeQspherePoints(N) {
     });
 }
 
-// Generate a small UV sphere centered at (cx, cy, cz). Each vertex stores position
-// followed by a flat RGBA color; Q-sphere nodes use an unlit color shader.
 function buildNodeSphere(cx, cy, cz, radius, r, g, b, a, segments) {
     const verts = [];
     for (let ri = 0; ri < segments; ri++) {
@@ -100,9 +87,6 @@ function getFocusedAlpha(pointIndex, focusedIndex) {
     return 0.24;
 }
 
-// Build one colored node for every basis state whose probability is non-negligible.
-// The square-root probability radius keeps visual area roughly proportional to
-// amplitude magnitude while avoiding enormous nodes for high probabilities.
 function buildQNodes(state, N, focusedIndex) {
     const verts = [];
     const points = computeQspherePoints(N);
@@ -119,8 +103,6 @@ function buildQNodes(state, N, focusedIndex) {
     return new Float32Array(verts);
 }
 
-// Draw the latitude rings associated with intermediate Hamming weights. The poles
-// are represented by the |0...0> and |1...1> nodes, so they need no rings.
 function buildHammingRings(N) {
     const verts = [];
     const segments = 64;
@@ -140,9 +122,6 @@ function buildHammingRings(N) {
     return new Float32Array(verts);
 }
 
-// Build a slim triangular tube from the Q-sphere center to a node. WebGPU line
-// primitives have implementation-defined width, so real geometry gives the spokes
-// a reliable visible thickness.
 function buildSpokeTube(end, radius, r, g, b, a, segments) {
     const [ex, ey, ez] = end;
     const length = Math.hypot(ex, ey, ez);
@@ -190,8 +169,6 @@ function buildSpokeTube(end, radius, r, g, b, a, segments) {
     return verts;
 }
 
-// Connect the center of the sphere to every occupied basis-state node. Spoke color
-// matches the destination dot so phase is readable even before noticing the dot.
 function buildQSphereSpokes(state, N, focusedIndex) {
     const verts = [];
     const points = computeQspherePoints(N);
@@ -223,9 +200,6 @@ function buildQSphereHoverTargets(state, N) {
     }).filter(target => target.probability >= 1e-5);
 }
 
-// Assemble all GPU buffers and label data needed to render one Q-sphere snapshot.
-// Ring and spoke buffers remain separate because Bloch mini-renderers use a
-// different line buffer and should never receive Q-sphere ring geometry.
 function computeQsphere(result, options) {
     const focusedIndex = options?.focusedIndex;
     const { state, N } = computeQsphereState(result);
@@ -243,7 +217,6 @@ function computeQsphere(result, options) {
     };
 }
 
-// Support both browser globals and CommonJS unit tests.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         computeQsphere,

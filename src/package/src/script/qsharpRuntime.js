@@ -1,16 +1,12 @@
 import { getDebugService, loadWasmModule, StepResultId } from 'qsharp-lang';
 
-// Bridge between Q# and the visualizer: execute the program with qsharp-lang's
-// debugger, capture quantum-state snapshots, and normalize them for rendering.
 let wasmReady;
 
-// Load the compiler/debugger WASM module once per webview lifetime.
 function ensureWasm(wasmUri) {
     if (!wasmReady) wasmReady = loadWasmModule(wasmUri);
     return wasmReady;
 }
 
-// Normalize the textual complex-number formats emitted by qsharp-lang.
 function parseAmplitude(value) {
     const normalized = String(value || '')
         .replace(/\s/g, '')
@@ -24,8 +20,6 @@ function parseAmplitude(value) {
     return { re: Number.isFinite(real) ? real : 0, im: 0 };
 }
 
-// Convert sparse debugger entries into a dense amplitude array indexed by the
-// binary computational-basis number.
 function snapshotFromEntries(entries) {
     const basisEntries = entries
         .map(entry => ({ bits: String(entry.name || '').match(/^\|([01]+)⟩$/)?.[1], value: parseAmplitude(entry.value) }))
@@ -41,13 +35,10 @@ function snapshotFromEntries(entries) {
     return { amplitudes, qubits };
 }
 
-// Produce a stable fingerprint so duplicate snapshots do not become duplicate
-// animation frames.
 function snapshotSignature(snapshot) {
     return `${snapshot.qubits}:${snapshot.amplitudes.map(value => `${value.re.toPrecision(12)},${value.im.toPrecision(12)}`).join(';')}`;
 }
 
-/** True when every qubit is in |0⟩ (the state produced by Reset). */
 function isTrivialState(snapshot) {
     if (!snapshot || snapshot.qubits === 0) return true;
     const amps = snapshot.amplitudes;
@@ -62,8 +53,6 @@ function formatFailure(message) {
     return typeof message === 'string' ? message.trim() : String(message || 'Unknown Q# execution error.');
 }
 
-// Execute Q# one debugger step at a time and collect distinct quantum states.
-// targetOp is supplied by a CodeLens when the user wants one operation's state.
 async function executeQSharp(source, fileName, wasmUri, targetOp) {
     await ensureWasm(wasmUri);
     const debugService = await getDebugService();
@@ -71,8 +60,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
     const result = { qubitsDeclared: 0, qubitsList: [], states: [], steps: [] };
     let lastSignature = null;
 
-    // Reset is bookkeeping rather than an animation frame, so remember its source
-    // lines and skip the immediately following post-reset snapshot.
     const resetPattern = /^\s*Reset(All)?\s*\(/i;
     const resetLines = new Set(
         (source || '').split('\n')
@@ -81,7 +68,7 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
     );
 
     try {
-        // Compile and load the current source before asking for debugger breakpoints.
+
         const loadFailure = await debugService.loadProgram({
             sources: [[sourceName, source]],
             languageFeatures: [],
@@ -96,11 +83,10 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
         const breakpointIds = breakpoints.map(breakpoint => breakpoint.id);
         const events = { dispatchEvent: () => true };
 
-        // The debugger may report a state immediately after Reset; skip that frame.
         let skipNextSnapshot = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
-            // Every debugger step is a possible animation checkpoint.
+
             const step = await debugService.evalNext(breakpointIds, events);
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
             const stackFrames = targetOp ? await debugService.getStackFrames() : [];
@@ -110,7 +96,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
 
             const isResetLine = range && resetLines.has(range.start.line);
 
-            // Capture the state after the step and retain only changed amplitudes.
             const snapshot = snapshotFromEntries(await debugService.captureQuantumState());
 
             if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
@@ -122,10 +107,8 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
                 }
             }
 
-            // Flag to skip the post-Reset state snapshot so Reset operations are invisible
             skipNextSnapshot = Boolean(isResetLine);
 
-            // Preserve debugger metadata separately from state snapshots for replay.
             result.steps.push({
                 resultId: step.id,
                 breakpointId: step.value,
@@ -140,8 +123,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
             if (step.id === StepResultId.Return) break;
         }
 
-        // Capture once more after stepping completes so the final operation's
-        // post-gate state is not lost when it is the last breakpoint.
         const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
         if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
             result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
@@ -157,13 +138,10 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
             result.error = 'Q# execution exceeded the 10,000-step safety limit.';
         }
 
-        // Keep only full quantum system snapshots matching qubitsDeclared,
-        // ignoring partial allocation/deallocation steps during scope entry/exit.
         if (result.qubitsDeclared > 0) {
             result.states = result.states.filter(snap => snap.qubits === result.qubitsDeclared);
         }
 
-        // Drop initial un-operated ground state |0…0⟩ before gates execute
         while (result.states.length > 1 && isTrivialState(result.states[0])) {
             result.states.shift();
         }
@@ -175,14 +153,11 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
     }
 }
 
-// Browser-facing parser entry point. The WASM URI is stored on the main canvas
-// so the same HTML can be served from the extension host and local test pages.
 function parseQSharp(source, targetOp) {
     const canvas = document.querySelector('canvas');
     return executeQSharp(source, 'main.qs', canvas?.dataset.qsharpWasm, targetOp);
 }
 
-// Publish the low-level executor for the UI wrapper and debugging tools.
 if (typeof window !== 'undefined') {
     window.qsphereQSharpRuntime = { executeQSharp };
     window.parseQSharp = parseQSharp;
