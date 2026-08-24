@@ -220,6 +220,9 @@ function computeQsphere(result, options) {
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
         computeQsphere,
+        computeQsphereState,
+        phaseToRgb,
+        hslToRgb,
         buildHammingRings,
         buildQSphereSpokes,
         buildQSphereHoverTargets,
@@ -228,9 +231,13 @@ if (typeof module !== 'undefined' && module.exports) {
     };
 } else if (typeof window !== 'undefined') {
     window.computeQsphere = computeQsphere;
+    window.computeQsphereState = computeQsphereState;
+    window.phaseToRgb = phaseToRgb;
+    window.hslToRgb = hslToRgb;
     window.buildHammingRings = buildHammingRings;
     window.buildQSphereSpokes = buildQSphereSpokes;
     window.buildQSphereHoverTargets = buildQSphereHoverTargets;
     window.buildQNodes = buildQNodes;
     window.computeQspherePoints = computeQspherePoints;
 }
+

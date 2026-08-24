@@ -20,7 +20,10 @@
 
     <h1 id="title">Qubit State Visualization</h1>
     <div id="view-tabs" role="tablist" aria-label="Visualization mode">
-        <button class="view-tab active" type="button" role="tab" aria-selected="true" data-view-mode="bloch">
+        <button class="view-tab active" type="button" role="tab" aria-selected="true" data-view-mode="statevector">
+            Statevector
+        </button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="bloch">
             Bloch
         </button>
         <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="qsphere">
@@ -28,10 +31,14 @@
         </button>
     </div>
 
+    <div id="statevector-container">
+        <div id="statevector-chart-wrapper">
+            <canvas id="statevector-canvas"></canvas>
+        </div>
+    </div>
+
     <div id="container">
-        <canvas id="canvas"
-                data-qsharp-wasm="wasm/qsc_wasm_bg.wasm"
-                data-test-qs="test.qs"></canvas>
+        <canvas id="canvas" data-qsharp-wasm="wasm/qsc_wasm_bg.wasm" data-test-qs="test.qs"></canvas>
 
         <div id="bloch-labels">
             <div class="label" id="label-zero">|0⟩</div>

@@ -1986,7 +1986,7 @@ ${val.stack}`;
   function formatFailure(message) {
     return typeof message === "string" ? message.trim() : String(message || "Unknown Q# execution error.");
   }
-  async function executeQSharp(source, fileName, wasmUri, targetOp) {
+  async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
     await ensureWasm(wasmUri);
     const debugService = await getDebugService();
     const sourceName = fileName || "main.qs";
@@ -1996,6 +1996,7 @@ ${val.stack}`;
     const resetLines = new Set(
       (source || "").split("\n").map((line, idx) => resetPattern.test(line) ? idx : -1).filter((idx) => idx >= 0)
     );
+    const hasTargetLine = typeof targetLine === "number" && targetLine >= 0;
     try {
       const loadFailure = await debugService.loadProgram({
         sources: [[sourceName, source]],
@@ -2033,6 +2034,9 @@ ${val.stack}`;
           breakpointId: step.value,
           range
         });
+        if (hasTargetLine && range && range.start.line > targetLine) {
+          break;
+        }
         if (step.id === StepResultId.Fail) {
           if (result.states.length === 0) {
             result.error = formatFailure(step.error);
@@ -2041,13 +2045,15 @@ ${val.stack}`;
         }
         if (step.id === StepResultId.Return) break;
       }
-      const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
-      if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
-        result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
-        const signature = snapshotSignature(finalSnapshot);
-        if (signature !== lastSignature) {
-          lastSignature = signature;
-          result.states.push(finalSnapshot);
+      if (!hasTargetLine) {
+        const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+        if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
+          result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
+          const signature = snapshotSignature(finalSnapshot);
+          if (signature !== lastSignature) {
+            lastSignature = signature;
+            result.states.push(finalSnapshot);
+          }
         }
       }
       if (result.steps.length >= 1e4 && !result.error) {
@@ -2065,9 +2071,9 @@ ${val.stack}`;
       await debugService.dispose();
     }
   }
-  function parseQSharp(source, targetOp) {
-    const canvas = document.querySelector("canvas");
-    return executeQSharp(source, "main.qs", canvas?.dataset.qsharpWasm, targetOp);
+  function parseQSharp(source, targetOp, targetLine) {
+    const wasmElement = document.querySelector("[data-qsharp-wasm]");
+    return executeQSharp(source, "main.qs", wasmElement?.dataset.qsharpWasm, targetOp, targetLine);
   }
   if (typeof window !== "undefined") {
     window.qsphereQSharpRuntime = { executeQSharp };

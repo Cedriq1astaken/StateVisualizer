@@ -12,10 +12,10 @@
         return result;
     }
 
-    window.parseQSharp = async function (source, targetOp) {
+    window.parseQSharp = async function (source, targetOp, targetLine) {
         const requestId = ++requestGeneration;
         try {
-            const result = await parseQSharp(source, targetOp);
+            const result = await parseQSharp(source, targetOp, targetLine);
             if (requestId !== requestGeneration) {
                 return lastSuccessfulResult || result;
             }

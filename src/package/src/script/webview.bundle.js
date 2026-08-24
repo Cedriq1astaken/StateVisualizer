@@ -19601,12 +19601,16 @@ void main() {
 
   // src/script/webview.js
   var vscode = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : void 0;
-  var canvas = document.querySelector("canvas");
+  var canvas = document.querySelector("#canvas");
   var statusText = document.querySelector("#status");
   var qsphereContainer = document.getElementById("container");
   var controlsContainer = document.getElementById("controls");
+  var statevectorContainer = document.getElementById("statevector-container");
+  var statevectorCanvas = document.getElementById("statevector-canvas");
+  var statevectorStats = document.getElementById("statevector-stats");
+  var statevectorChartWrapper = document.getElementById("statevector-chart-wrapper");
   var rotationAngles = [0.3, 0, 0];
-  var currentMode = "bloch";
+  var currentMode = "statevector";
   var lastParsedResult = null;
   var selectedQubitIndex = 0;
   var selectedQubitName = null;
@@ -19614,8 +19618,40 @@ void main() {
   var miniRenderers = [];
   var qubitSphereSize = 270;
   var qsphereHoverInfo = null;
+  var statevectorHoverInfo = null;
+  var hoveredStateIndex = null;
   function vectorsClose(a, b, epsilon = 1e-3) {
     return Math.abs(a[0] - b[0]) < epsilon && Math.abs(a[1] - b[1]) < epsilon && Math.abs(a[2] - b[2]) < epsilon;
+  }
+  function getQsphereState(result) {
+    if (typeof computeQsphereState === "function") {
+      return computeQsphereState(result);
+    }
+    if (typeof window !== "undefined" && typeof window.computeQsphereState === "function") {
+      return window.computeQsphereState(result);
+    }
+    const states = result?.states || [];
+    const latest = states.length > 0 ? states[states.length - 1] : null;
+    const N = latest?.qubits || result?.qubitsDeclared || 0;
+    const state = latest?.amplitudes || Array.from(
+      { length: 2 ** N },
+      () => ({ re: 0, im: 0 })
+    );
+    return { state, N };
+  }
+  function getPhaseToRgb(phase) {
+    if (typeof phaseToRgb === "function") {
+      return phaseToRgb(phase);
+    }
+    if (typeof window !== "undefined" && typeof window.phaseToRgb === "function") {
+      return window.phaseToRgb(phase);
+    }
+    const deg = (phase / (2 * Math.PI) * 360 + 360) % 360;
+    const s = 0.68, l = 0.68;
+    const k = (n) => (n + deg / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [f(0), f(8), f(4)];
   }
   function createQubitSphereStage(card, canvasElement) {
     const stage = document.createElement("div");
@@ -19646,7 +19682,7 @@ void main() {
   }
   function drawPhaseLegend() {
     const legendCanvas = document.getElementById("qsphere-phase-wheel");
-    if (!legendCanvas || typeof phaseToRgb !== "function") return;
+    if (!legendCanvas) return;
     const context = legendCanvas.getContext("2d");
     if (!context) return;
     const center = legendCanvas.width / 2;
@@ -19658,7 +19694,7 @@ void main() {
       const start = index / segments * Math.PI * 2;
       const end = (index + 1) / segments * Math.PI * 2;
       const phase = -((start + end) / 2);
-      const [r, g, b] = phaseToRgb(phase);
+      const [r, g, b] = getPhaseToRgb(phase);
       context.beginPath();
       context.arc(center, center, outerRadius, start, end);
       context.arc(center, center, innerRadius, end, start, true);
@@ -19690,8 +19726,16 @@ void main() {
     qsphereContainer.appendChild(qsphereHoverInfo);
     return qsphereHoverInfo;
   }
+  function getStatevectorHoverInfo() {
+    if (statevectorHoverInfo || !statevectorContainer) return statevectorHoverInfo;
+    statevectorHoverInfo = document.createElement("div");
+    statevectorHoverInfo.className = "statevector-hover-info";
+    statevectorHoverInfo.hidden = true;
+    statevectorContainer.appendChild(statevectorHoverInfo);
+    return statevectorHoverInfo;
+  }
   function formatBasisState(index, qubits) {
-    return `|${index.toString(2).padStart(qubits, "0")}>`;
+    return `|${index.toString(2).padStart(qubits, "0")}\u27E9`;
   }
   function formatPhasePi(phase) {
     const twoPi = Math.PI * 2;
@@ -19699,15 +19743,204 @@ void main() {
     const units = normalized / Math.PI;
     const known = [
       [0, "0"],
-      [0.5, "pi/2"],
-      [1, "pi"],
-      [1.5, "3pi/2"],
+      [0.5, "\u03C0/2"],
+      [1, "\u03C0"],
+      [1.5, "3\u03C0/2"],
       [2, "0"]
     ];
     for (const [value, label] of known) {
       if (Math.abs(units - value) < 0.03) return label;
     }
-    return `${units.toFixed(2)}pi`;
+    return `${units.toFixed(2)}\u03C0`;
+  }
+  var statevectorBarData = [];
+  function renderStateVectorHistogram(result) {
+    if (!statevectorCanvas) return;
+    const ctx = statevectorCanvas.getContext("2d");
+    if (!ctx) return;
+    const { state, N } = getQsphereState(result);
+    const numStates = 2 ** N;
+    if (statevectorStats) {
+      let activeCount = 0;
+      let totalProb = 0;
+      for (let i = 0; i < numStates; i++) {
+        const amp = state[i] || { re: 0, im: 0 };
+        const p = amp.re * amp.re + amp.im * amp.im;
+        if (p > 1e-5) activeCount++;
+        totalProb += p;
+      }
+      statevectorStats.textContent = N > 0 ? `${N} Qubit${N > 1 ? "s" : ""} \u2022 ${numStates} Basis States \u2022 ${activeCount} Non-Zero States` : "";
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
+    const paddingLeft = 52;
+    const paddingRight = 20;
+    const paddingTop = 28;
+    const paddingBottom = 42;
+    const plotHeight = 210;
+    const totalHeight = paddingTop + plotHeight + paddingBottom;
+    const minBarWidth = numStates <= 8 ? 44 : numStates <= 16 ? 30 : 20;
+    const barGap = numStates <= 8 ? 20 : numStates <= 16 ? 12 : 8;
+    const minPlotWidth = numStates * (minBarWidth + barGap);
+    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
+    const plotWidth = totalWidth - paddingLeft - paddingRight;
+    if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(totalHeight * dpr)) {
+      statevectorCanvas.width = Math.floor(totalWidth * dpr);
+      statevectorCanvas.height = Math.floor(totalHeight * dpr);
+      statevectorCanvas.style.width = `${totalWidth}px`;
+      statevectorCanvas.style.height = `${totalHeight}px`;
+    }
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, totalWidth, totalHeight);
+    const yTicks = [1, 0.75, 0.5, 0.25, 0];
+    ctx.font = "11px system-ui, -apple-system, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (const tick of yTicks) {
+      const y = paddingTop + (1 - tick) * plotHeight;
+      ctx.strokeStyle = tick === 0 ? "rgba(220, 220, 235, 0.35)" : "rgba(220, 220, 235, 0.1)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash(tick === 0 ? [] : [4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(paddingLeft, y);
+      ctx.lineTo(totalWidth - paddingRight, y);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(230, 230, 238, 0.6)";
+      ctx.fillText(tick.toFixed(2), paddingLeft - 8, y);
+    }
+    ctx.setLineDash([]);
+    if (numStates === 0 || N === 0) {
+      ctx.fillStyle = "rgba(230, 230, 238, 0.5)";
+      ctx.textAlign = "center";
+      ctx.font = "13px system-ui, -apple-system, sans-serif";
+      ctx.fillText("No quantum state declared.", totalWidth / 2, paddingTop + plotHeight / 2);
+      ctx.restore();
+      statevectorBarData = [];
+      return;
+    }
+    const step = plotWidth / numStates;
+    const barWidth = Math.max(14, Math.min(52, step - barGap));
+    statevectorBarData = [];
+    for (let i = 0; i < numStates; i++) {
+      const amp = state[i] || { re: 0, im: 0 };
+      const magnitude = Math.sqrt(amp.re * amp.re + amp.im * amp.im);
+      const probability = amp.re * amp.re + amp.im * amp.im;
+      const phase = Math.atan2(amp.im, amp.re);
+      const [r, g, b] = getPhaseToRgb(phase);
+      const barX = paddingLeft + i * step + (step - barWidth) / 2;
+      const barHeight = Math.max(0, Math.min(plotHeight, magnitude * plotHeight));
+      const barY = paddingTop + plotHeight - barHeight;
+      const isHovered = hoveredStateIndex === i;
+      statevectorBarData.push({
+        index: i,
+        label: formatBasisState(i, N),
+        amp,
+        magnitude,
+        probability,
+        phase,
+        color: `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`,
+        x: barX,
+        y: barY,
+        width: barWidth,
+        height: barHeight,
+        centerX: barX + barWidth / 2
+      });
+      if (barHeight > 1) {
+        ctx.save();
+        ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        if (isHovered) {
+          ctx.shadowColor = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.6)`;
+          ctx.shadowBlur = 8;
+        }
+        const radius = Math.min(3, barWidth / 2, barHeight / 2);
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") {
+          ctx.roundRect(barX, barY, barWidth, barHeight, [radius, radius, 0, 0]);
+        } else {
+          ctx.rect(barX, barY, barWidth, barHeight);
+        }
+        ctx.fill();
+        if (isHovered) {
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else {
+        ctx.fillStyle = "rgba(220, 220, 235, 0.2)";
+        ctx.fillRect(barX, paddingTop + plotHeight - 1.5, barWidth, 1.5);
+      }
+      if (magnitude >= 0.05) {
+        ctx.fillStyle = isHovered ? "#ffffff" : "rgba(230, 230, 238, 0.85)";
+        ctx.font = "600 10px system-ui, -apple-system, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        const labelY2 = Math.max(paddingTop - 2, barY - 6);
+        ctx.fillText(magnitude.toFixed(2), barX + barWidth / 2, labelY2);
+      }
+      ctx.fillStyle = isHovered ? "#ffffff" : magnitude > 1e-4 ? "#e0e0e0" : "rgba(230, 230, 238, 0.4)";
+      ctx.font = isHovered ? "700 12px system-ui, -apple-system, sans-serif" : "600 12px system-ui, -apple-system, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const labelText = formatBasisState(i, N);
+      const labelY = paddingTop + plotHeight + 8;
+      if (step < 32 && numStates > 8) {
+        ctx.save();
+        ctx.translate(barX + barWidth / 2, labelY);
+        ctx.rotate(-Math.PI / 4);
+        ctx.textAlign = "right";
+        ctx.fillText(labelText, 0, 0);
+        ctx.restore();
+      } else {
+        ctx.fillText(labelText, barX + barWidth / 2, labelY);
+      }
+    }
+    ctx.restore();
+  }
+  if (statevectorCanvas) {
+    statevectorCanvas.addEventListener("mousemove", (event) => {
+      if (currentMode !== "statevector" || !statevectorBarData.length) return;
+      const rect = statevectorCanvas.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
+      let hovered = null;
+      for (const bar of statevectorBarData) {
+        if (mouseX >= bar.x - 4 && mouseX <= bar.x + bar.width + 4 && mouseY >= 10 && mouseY <= rect.height - 10) {
+          hovered = bar;
+          break;
+        }
+      }
+      const prev = hoveredStateIndex;
+      hoveredStateIndex = hovered ? hovered.index : null;
+      if (prev !== hoveredStateIndex) {
+        renderStateVectorHistogram(lastParsedResult);
+      }
+      const hoverInfo = getStatevectorHoverInfo();
+      if (hovered && hoverInfo) {
+        const phaseDeg = (hovered.phase * 180 / Math.PI % 360 + 360) % 360;
+        const reSign = hovered.amp.im >= 0 ? "+" : "-";
+        const imAbs = Math.abs(hovered.amp.im);
+        const complexStr = `${hovered.amp.re.toFixed(4)} ${reSign} ${imAbs.toFixed(4)}i`;
+        hoverInfo.innerHTML = `<strong>${hovered.label}</strong><br>Amplitude: ${hovered.magnitude.toFixed(4)}<br>Probability: ${(hovered.probability * 100).toFixed(1)}%<br>Phase: ${phaseDeg.toFixed(1)}\xB0 (${formatPhasePi(hovered.phase)})`;
+        const containerRect = statevectorContainer.getBoundingClientRect();
+        const posX = event.clientX - containerRect.left + 12;
+        const posY = event.clientY - containerRect.top + 12;
+        hoverInfo.style.left = `${Math.min(containerRect.width - 150, Math.max(8, posX))}px`;
+        hoverInfo.style.top = `${Math.min(containerRect.height - 80, Math.max(8, posY))}px`;
+        hoverInfo.hidden = false;
+      } else if (hoverInfo) {
+        hoverInfo.hidden = true;
+      }
+    });
+    statevectorCanvas.addEventListener("mouseleave", () => {
+      if (hoveredStateIndex !== null) {
+        hoveredStateIndex = null;
+        renderStateVectorHistogram(lastParsedResult);
+      }
+      const hoverInfo = getStatevectorHoverInfo();
+      if (hoverInfo) hoverInfo.hidden = true;
+    });
   }
   function createSphereMaterial() {
     return new ShaderMaterial({
@@ -19973,7 +20206,7 @@ void main() {
       if (probability < 1e-5) continue;
       const radius = 0.12 * Math.sqrt(probability);
       const phase = Math.atan2(amp.im, amp.re);
-      const [r, g, b] = phaseToRgb(phase);
+      const [r, g, b] = getPhaseToRgb(phase);
       const focusedIndex = threeState._qsphereHoveredIndex;
       const alpha = focusedIndex === null || focusedIndex === void 0 || point.index === focusedIndex ? 1 : 0.24;
       const node = createQnodeMesh(point.x, point.y, point.z, radius, r, g, b, alpha);
@@ -19982,7 +20215,7 @@ void main() {
       if (spoke) group.add(spoke);
     }
     threeState._qsphereData = qs;
-    if (options.rebuildLabels !== false) rebuildQsphereLabels(qs.points, qs.N);
+    if (options.rebuildLabels !== false) rebuildQsphereLabels(qs.points, qs.N, qs.state);
   }
   function setQsphereHoveredIndex(index) {
     if (!threeState || threeState._qsphereHoveredIndex === index) return;
@@ -20035,12 +20268,14 @@ void main() {
     hoverInfo.hidden = false;
   }
   function setVisualizationMode(mode) {
-    if (mode !== "bloch" && mode !== "qsphere") return;
+    if (mode !== "statevector" && mode !== "bloch" && mode !== "qsphere") return;
     clearQsphereHover();
     currentMode = mode;
     updateModeTabs();
     updateVisibility(lastParsedResult?.qubitsDeclared || 0);
-    if (lastParsedResult && currentMode === "qsphere") {
+    if (currentMode === "statevector" && lastParsedResult) {
+      renderStateVectorHistogram(lastParsedResult);
+    } else if (currentMode === "qsphere" && lastParsedResult) {
       resizeRenderer(threeState);
       updateQsphereScene(lastParsedResult);
     }
@@ -20390,12 +20625,18 @@ void main() {
     }
   }
   var _qsLabelData = [];
-  function rebuildQsphereLabels(points, N) {
+  function rebuildQsphereLabels(points, N, state) {
     const qsLabelsDiv = document.getElementById("qs-labels");
     if (!qsLabelsDiv) return;
     qsLabelsDiv.innerHTML = "";
     _qsLabelData = [];
+    if (!points || !N) return;
     for (const pt of points) {
+      if (state) {
+        const amp = state[pt.index] || { re: 0, im: 0 };
+        const probability = amp.re * amp.re + amp.im * amp.im;
+        if (probability < 1e-5) continue;
+      }
       const binaryStr = pt.index.toString(2).padStart(N, "0");
       const el = document.createElement("div");
       el.className = "label qs-label";
@@ -20426,9 +20667,10 @@ void main() {
           renderScene();
         } catch (e) {
         }
-      }
-      for (const renderer of miniRenderers) {
-        renderMiniRenderer(renderer);
+      } else if (currentMode === "bloch") {
+        for (const renderer of miniRenderers) {
+          renderMiniRenderer(renderer);
+        }
       }
     }
     requestAnimationFrame(frame);
@@ -20436,6 +20678,7 @@ void main() {
   initScene().then((state) => {
     threeState = state;
     if (lastParsedResult) {
+      renderStateVectorHistogram(lastParsedResult);
       populateQubitColumn(lastParsedResult);
     }
     if (vscode) {
@@ -20455,11 +20698,20 @@ void main() {
       } catch (e) {
       }
     }
+    if (currentMode === "statevector" && lastParsedResult) {
+      renderStateVectorHistogram(lastParsedResult);
+    }
   });
   function updateVisibility(qubitsDeclared) {
     const container = qsphereContainer;
     const controls = controlsContainer;
+    const stateContainer = statevectorContainer;
     const phaseLegend = document.getElementById("qsphere-phase-legend");
+    if (stateContainer) {
+      const showStateVector = currentMode === "statevector";
+      stateContainer.hidden = !showStateVector;
+      stateContainer.style.display = showStateVector ? "flex" : "none";
+    }
     if (container) {
       const showQsphere = currentMode === "qsphere";
       if (showQsphere && !container.parentElement) {
@@ -20481,7 +20733,10 @@ void main() {
       controls.hidden = !showBloch;
       controls.style.display = showBloch ? "flex" : "none";
     }
-    if (phaseLegend) phaseLegend.style.display = currentMode === "qsphere" ? "block" : "none";
+    if (phaseLegend) {
+      const showLegend = currentMode === "qsphere" || currentMode === "statevector";
+      phaseLegend.style.display = showLegend ? "block" : "none";
+    }
   }
   function populateQubitColumn(result) {
     const column = document.getElementById("qubit-column");
@@ -20537,6 +20792,35 @@ void main() {
       replayAnimation();
       return;
     }
+    if (message.command === "inspectLine") {
+      if (message.data && message.data.code) {
+        const updateGeneration = ++sourceUpdateGeneration;
+        pendingCode = message.data.code;
+        if (message.data.targetOp !== void 0) {
+          currentTargetOp = message.data.targetOp;
+        }
+        const targetLine = message.data.targetLine;
+        const result = await parseQSharp(pendingCode, currentTargetOp, targetLine);
+        if (updateGeneration !== sourceUpdateGeneration) return;
+        console.log("Q# Inspected Line Result (line " + (targetLine + 1) + "):", result);
+        lastParsedResult = result;
+        updateVisibility(result.qubitsDeclared);
+        renderStateVectorHistogram(result);
+        populateQubitColumn(result);
+        if (threeState) {
+          if (currentMode === "qsphere") {
+            updateQsphereScene(result);
+          }
+        }
+      }
+      if (threeState && currentMode === "qsphere") {
+        try {
+          renderScene();
+        } catch (e) {
+        }
+      }
+      return;
+    }
     if (message.command === "init" || message.command === "update") {
       if (message.data && message.data.code) {
         const updateGeneration = ++sourceUpdateGeneration;
@@ -20549,6 +20833,7 @@ void main() {
         console.log("Q# Parse Result:", result);
         lastParsedResult = result;
         updateVisibility(result.qubitsDeclared);
+        renderStateVectorHistogram(result);
         populateQubitColumn(result);
         if (threeState) {
           if (currentMode === "qsphere") {
