@@ -59,6 +59,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
-    "qsharp-lang": "^1.31.0"
+    "qsharp-lang": "^1.31.0",
+    "three": "^0.170.0"
   }
 }
