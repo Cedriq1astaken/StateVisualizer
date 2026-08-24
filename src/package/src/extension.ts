@@ -74,9 +74,48 @@ export function activate(context: vscode.ExtensionContext) {
         });
     });
 
+    const inspectCurrentLineDisposable = vscode.commands.registerCommand('qsphere.inspectCurrentLine', () => {
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor) return;
+
+        const document = activeEditor.document;
+        if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return;
+
+        const cursorLine = activeEditor.selection.active.line;
+        const lineText = document.lineAt(cursorLine).text.trim();
+
+        if (!activePanel) {
+            vscode.commands.executeCommand('qsphere.openVisualizer');
+            setTimeout(() => {
+                activePanel?.webview.postMessage({
+                    command: 'inspectLine',
+                    data: {
+                        fileName: document.fileName,
+                        code: document.getText(),
+                        targetLine: cursorLine,
+                        lineText,
+                        targetOp: activeTargetOp
+                    }
+                });
+            }, 300);
+        } else {
+            activePanel.webview.postMessage({
+                command: 'inspectLine',
+                data: {
+                    fileName: document.fileName,
+                    code: document.getText(),
+                    targetLine: cursorLine,
+                    lineText,
+                    targetOp: activeTargetOp
+                }
+            });
+        }
+    });
+
     const replayAnimationDisposable = vscode.commands.registerCommand('qsphere.replayAnimation', () => {
         activePanel?.webview.postMessage({ command: 'replayAnimation' });
     });
+
 
     const codeLensProvider = vscode.languages.registerCodeLensProvider(
         [{ pattern: '**/*.qs' }, { language: 'qsharp' }],
@@ -149,8 +188,9 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     );
-    context.subscriptions.push(openVisualizerDisposable, replayAnimationDisposable, codeLensProvider);
+    context.subscriptions.push(openVisualizerDisposable, inspectCurrentLineDisposable, replayAnimationDisposable, codeLensProvider);
 }
+
 
 export function deactivate() {}
 

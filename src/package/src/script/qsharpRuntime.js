@@ -53,7 +53,7 @@ function formatFailure(message) {
     return typeof message === 'string' ? message.trim() : String(message || 'Unknown Q# execution error.');
 }
 
-async function executeQSharp(source, fileName, wasmUri, targetOp) {
+async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
     await ensureWasm(wasmUri);
     const debugService = await getDebugService();
     const sourceName = fileName || 'main.qs';
@@ -67,8 +67,9 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
             .filter(idx => idx >= 0)
     );
 
-    try {
+    const hasTargetLine = typeof targetLine === 'number' && targetLine >= 0;
 
+    try {
         const loadFailure = await debugService.loadProgram({
             sources: [[sourceName, source]],
             languageFeatures: [],
@@ -86,7 +87,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
         let skipNextSnapshot = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
-
             const step = await debugService.evalNext(breakpointIds, events);
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
             const stackFrames = targetOp ? await debugService.getStackFrames() : [];
@@ -114,6 +114,12 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
                 breakpointId: step.value,
                 range
             });
+
+            if (hasTargetLine && range && range.start.line > targetLine) {
+                break;
+            }
+
+
             if (step.id === StepResultId.Fail) {
                 if (result.states.length === 0) {
                     result.error = formatFailure(step.error);
@@ -123,15 +129,16 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
             if (step.id === StepResultId.Return) break;
         }
 
-        const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
-        if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
-            result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
-            const signature = snapshotSignature(finalSnapshot);
-            if (signature !== lastSignature) {
-                lastSignature = signature;
-                result.states.push(finalSnapshot);
+        if (!hasTargetLine) {
+            const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+            if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
+                result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
+                const signature = snapshotSignature(finalSnapshot);
+                if (signature !== lastSignature) {
+                    lastSignature = signature;
+                    result.states.push(finalSnapshot);
+                }
             }
-
         }
 
         if (result.steps.length >= 10000 && !result.error) {
@@ -153,12 +160,14 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
     }
 }
 
-function parseQSharp(source, targetOp) {
-    const canvas = document.querySelector('canvas');
-    return executeQSharp(source, 'main.qs', canvas?.dataset.qsharpWasm, targetOp);
+function parseQSharp(source, targetOp, targetLine) {
+    const wasmElement = document.querySelector('[data-qsharp-wasm]');
+    return executeQSharp(source, 'main.qs', wasmElement?.dataset.qsharpWasm, targetOp, targetLine);
 }
 
 if (typeof window !== 'undefined') {
     window.qsphereQSharpRuntime = { executeQSharp };
     window.parseQSharp = parseQSharp;
 }
+
+

@@ -23,9 +23,21 @@
         "icon": "$(graph)"
       },
       {
+        "command": "qsphere.inspectCurrentLine",
+        "title": "Qsphere: Step to Current Line",
+        "category": "Qsphere"
+      },
+      {
         "command": "qsphere.replayAnimation",
         "title": "Qsphere: Replay Animation",
         "category": "Qsphere"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "qsphere.inspectCurrentLine",
+        "key": "shift+enter",
+        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp)"
       }
     ],
     "menus": {
@@ -41,10 +53,16 @@
           "command": "qsphere.openVisualizer",
           "group": "navigation",
           "when": "resourceExtname == .qs || editorLangId == qsharp"
+        },
+        {
+          "command": "qsphere.inspectCurrentLine",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
         }
       ]
     }
   },
+
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "npm run bundle:webview && tsc -p ./",
