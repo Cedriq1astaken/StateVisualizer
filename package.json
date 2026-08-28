@@ -1,7 +1,7 @@
 {
-  "name": "qsphere",
-  "displayName": "Qsphere Quantum Visualizer",
-  "description": "Quantum circuit and state visualization extension for VS Code",
+  "name": "state-visualizer",
+  "displayName": "StateVisualizer",
+  "description": "Interactive quantum state visualizer with live step-through execution for Q#",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"

@@ -1,6 +1,6 @@
-# Qsphere
+# StateVisualizer
 
-A VS Code extension for visualizing Q# quantum state snapshots.
+An interactive VS Code extension for visualizing Q# quantum states across statevector histograms, 3D Bloch spheres, and 3D Q-spheres.
 
 It currently provides:
 

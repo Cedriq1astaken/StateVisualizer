@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
             codeContent = fs.readFileSync(defaultSamplePath, 'utf8');
         }
 
-        const titleName = activeTargetOp?.name ? `Qsphere: ${activeTargetOp.name}` : 'Qsphere Quantum Visualizer';
+        const titleName = 'StateVisualizer';
 
         const panel = vscode.window.createWebviewPanel(
             'qsphereVisualizer',
