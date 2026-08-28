@@ -50,22 +50,68 @@ export function activate(context: vscode.ExtensionContext) {
             panel.webview.postMessage({ command, data: { fileName: sourceName, code, targetOp: activeTargetOp } });
         };
 
-        const readyDisposable = panel.webview.onDidReceiveMessage(message => {
-            if (message.command !== 'ready') return;
-            if (pendingInspectPayload) {
-                panel.webview.postMessage({
-                    command: 'inspectLine',
-                    data: pendingInspectPayload
-                });
-                pendingInspectPayload = null;
+        const readyDisposable = panel.webview.onDidReceiveMessage(async message => {
+            if (message.command === 'ready') {
+                if (pendingInspectPayload) {
+                    panel.webview.postMessage({
+                        command: 'inspectLine',
+                        data: pendingInspectPayload
+                    });
+                    pendingInspectPayload = null;
+                    return;
+                }
+                const currentEditor = vscode.window.activeTextEditor;
+                postSource(
+                    'init',
+                    currentEditor?.document.getText() || codeContent,
+                    currentEditor?.document.fileName || fileName
+                );
                 return;
             }
-            const currentEditor = vscode.window.activeTextEditor;
-            postSource(
-                'init',
-                currentEditor?.document.getText() || codeContent,
-                currentEditor?.document.fileName || fileName
-            );
+
+            if (message.command === 'exportFiles') {
+                try {
+                    const { name, pngDataUrl, svgContent } = message.data || {};
+                    const vizName = name || 'visualization';
+
+                    // Generate timestamp formatted as YYYY-MM-DD_HH-mm-ss
+                    const now = new Date();
+                    const pad = (n: number) => String(n).padStart(2, '0');
+                    const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+
+                    // Determine target directory (active .qs file dir -> workspace root -> cwd)
+                    const activeDoc = vscode.window.activeTextEditor?.document;
+                    let targetDir = '';
+                    if (activeDoc && !activeDoc.isUntitled && activeDoc.fileName) {
+                        targetDir = path.dirname(activeDoc.fileName);
+                    } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+                        targetDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
+                    } else {
+                        targetDir = process.cwd();
+                    }
+
+                    const pngFileName = `${vizName}_${timestamp}.png`;
+                    const svgFileName = `${vizName}_${timestamp}.svg`;
+                    const pngFilePath = path.join(targetDir, pngFileName);
+                    const svgFilePath = path.join(targetDir, svgFileName);
+
+                    if (pngDataUrl) {
+                        const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '');
+                        await fs.promises.writeFile(pngFilePath, Buffer.from(base64Data, 'base64'));
+                    }
+
+                    if (svgContent) {
+                        await fs.promises.writeFile(svgFilePath, svgContent, 'utf8');
+                    }
+
+                    vscode.window.showInformationMessage(
+                        `StateVisualizer: Exported ${pngFileName} and ${svgFileName}`
+                    );
+                } catch (err) {
+                    console.error('Error exporting visualization files:', err);
+                    vscode.window.showErrorMessage(`StateVisualizer export failed: ${String(err)}`);
+                }
+            }
         });
 
         postSource('init', codeContent, fileName);
@@ -264,7 +310,6 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const cssPath = path.join(extRoot, 'src', 'webview', 'styles.css');
     const runtimePath = path.join(extRoot, 'dist', 'qsharpRuntime.bundle.js');
     const runtimeUiPath = path.join(extRoot, 'src', 'webview', 'runtime', 'qsharpRuntimeUi.js');
-    const mathJsPath = path.join(extRoot, 'src', 'webview', 'math', 'math.js');
     const webviewBundlePath = path.join(extRoot, 'dist', 'webview.bundle.js');
     const wasmPath = path.join(extRoot, 'assets', 'wasm', 'qsc_wasm_bg.wasm');
     const testQsPath = path.join(extRoot, 'samples', 'test.qs');
@@ -277,7 +322,6 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
         .replace('styles.css', uri(cssPath))
         .replace('dist/qsharpRuntime.bundle.js', uri(runtimePath))
         .replace('runtime/qsharpRuntimeUi.js', uri(runtimeUiPath))
-        .replace('math/math.js', uri(mathJsPath))
         .replace('dist/webview.bundle.js', uri(webviewBundlePath))
         .replace('assets/wasm/qsc_wasm_bg.wasm', uri(wasmPath))
         .replace('samples/test.qs', uri(testQsPath));

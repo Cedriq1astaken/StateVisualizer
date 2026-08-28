@@ -4,18 +4,18 @@ import {
     getAllVisualizations,
     registerVisualization
 } from './visualizations/index.js';
-import { getPhaseToRgb } from './visualizations/statevector.js';
 import {
     createSphereMaterial,
     createLineMaterial,
     createSphereWireframe
 } from './visualizations/bloch.js';
 import {
+    getPhaseToRgb,
     mult,
     createPerspectiveMatrix,
     createTranslationMatrix,
     rotateMatrix
-} from './math/math.js';
+} from './math/index.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
@@ -113,7 +113,8 @@ function initThreeRenderer() {
         canvas,
         alpha: true,
         antialias: true,
-        premultipliedAlpha: true
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: true
     });
     renderer.setClearColor(0x000000, 0);
     renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -267,6 +268,41 @@ document.querySelectorAll('.view-tab').forEach(tab => {
 });
 updateModeTabs();
 drawPhaseLegend();
+
+window.rotationAngles = rotationAngles;
+
+// Export button event listener
+const exportBtn = document.getElementById('export-btn');
+if (exportBtn) {
+    exportBtn.addEventListener('click', async () => {
+        const activeViz = getVisualization(currentMode);
+        if (!activeViz?.export) return;
+
+        exportBtn.disabled = true;
+        const labelSpan = exportBtn.querySelector('span');
+        const originalText = labelSpan?.textContent || 'Export';
+        if (labelSpan) labelSpan.textContent = 'Exporting...';
+
+        try {
+            const result = await activeViz.export({ threeState, canvas });
+            if (result && vscode) {
+                vscode.postMessage({
+                    command: 'exportFiles',
+                    data: {
+                        name: result.filenamePrefix || currentMode,
+                        pngDataUrl: result.pngDataUrl,
+                        svgContent: result.svgContent
+                    }
+                });
+            }
+        } catch (err) {
+            console.error('Export failed:', err);
+        } finally {
+            exportBtn.disabled = false;
+            if (labelSpan) labelSpan.textContent = originalText;
+        }
+    });
+}
 
 function frame() {
     const activeViz = getVisualization(currentMode);

@@ -1,50 +1,22 @@
 import * as THREE from 'three';
 import {
     projectPoint,
-    rotateMatrix
-} from '../math/math.js';
-import {
+    rotateMatrix,
     getPhaseToRgb,
     formatBasisState,
     formatPhasePi,
     getQsphereState,
+    hammingWeight,
+    computeQspherePoints,
+    stepStatevectorTransition
+} from '../math/index.js';
+import {
     renderStateVectorHistogram,
-    stepStatevectorTransition,
     getIsTransitioning,
     getCurrentAmplitudes,
-    getCurrentQubits
+    getCurrentQubits,
+    stepActiveStatevectorTransition
 } from './statevector.js';
-
-function hammingWeight(n) {
-    let count = 0;
-    while (n > 0) {
-        count += n & 1;
-        n >>>= 1;
-    }
-    return count;
-}
-
-function computeQspherePoints(N) {
-    const size = 2 ** N;
-    const byWeight = Array.from({ length: N + 1 }, () => []);
-    for (let k = 0; k < size; k++) byWeight[hammingWeight(k)].push(k);
-
-    return Array.from({ length: size }, (_, k) => {
-        const w = hammingWeight(k);
-        const group = byWeight[w];
-        const M = group.length;
-        const j = group.indexOf(k);
-        const theta = N === 0 ? 0 : (Math.PI * w) / N;
-        const phi = M === 1 ? 0 : (2 * Math.PI * j) / M;
-        return {
-            index: k,
-            x: Math.sin(theta) * Math.cos(phi),
-            y: Math.cos(theta),
-            z: Math.sin(theta) * Math.sin(phi),
-            w
-        };
-    });
-}
 
 function computeQsphereWithState(state, N, options) {
     const focusedIndex = options?.focusedIndex;
@@ -377,6 +349,201 @@ function updateQsphereHover(event, canvas, rotationAngles) {
     hoverInfo.hidden = false;
 }
 
+function generateQsphereSvg() {
+    const qsphereData = threeState?._qsphereData;
+    const N = qsphereData?.N || (lastResult ? getQsphereState(lastResult).N : 0);
+    const state = qsphereData?.state || (lastResult ? getQsphereState(lastResult).state : []);
+    const points = qsphereData?.points || computeQspherePoints(N);
+
+    const totalW = 420;
+    const totalH = 340;
+    const sphereBoxSize = 300;
+    const sphereOffsetX = 10;
+    const sphereOffsetY = 20;
+
+    const modelMatrix = threeState?._projMatrix
+        ? rotateMatrix(...(window.rotationAngles || [0.3, 0.0, 0.0]), threeState._projMatrix)
+        : rotateMatrix(0.3, 0.0, 0.0, threeState?._buildProjMatrix ? threeState._buildProjMatrix() : new Float32Array(16));
+
+    let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}">\n` +
+        `  <defs>\n` +
+        `    <linearGradient id="qspherePhaseGrad" x1="0%" y1="100%" x2="0%" y2="0%">\n`;
+
+    const stops = [0, 0.25, 0.5, 0.75, 1.0];
+    for (const s of stops) {
+        const [r, g, b] = getPhaseToRgb(s * Math.PI * 2);
+        svg += `      <stop offset="${(s * 100).toFixed(0)}%" stop-color="rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})"/>\n`;
+    }
+    svg += `    </linearGradient>\n` +
+        `    <style>\n` +
+        `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
+        `    </style>\n` +
+        `  </defs>\n`;
+
+    // Hamming Rings
+    const segments = 32;
+    for (let w = 1; w < N; w++) {
+        const theta = (Math.PI * w) / N;
+        const ringY = Math.cos(theta);
+        const ringR = Math.sin(theta);
+        const ringPoints = [];
+        for (let s = 0; s <= segments; s++) {
+            const a = (s / segments) * 2 * Math.PI;
+            const pt = projectPoint([ringR * Math.cos(a), ringY, ringR * Math.sin(a)], modelMatrix, sphereBoxSize, sphereBoxSize);
+            if (pt) ringPoints.push(`${(pt[0] + sphereOffsetX).toFixed(1)},${(pt[1] + sphereOffsetY).toFixed(1)}`);
+        }
+        if (ringPoints.length > 1) {
+            svg += `  <polyline points="${ringPoints.join(' ')}" fill="none" stroke="#5a6578" stroke-width="1" stroke-opacity="0.4"/>\n`;
+        }
+    }
+
+    // Outer sphere boundary
+    const sphereCenter = projectPoint([0, 0, 0], modelMatrix, sphereBoxSize, sphereBoxSize) || [sphereBoxSize / 2, sphereBoxSize / 2];
+    svg += `  <circle cx="${(sphereCenter[0] + sphereOffsetX).toFixed(1)}" cy="${(sphereCenter[1] + sphereOffsetY).toFixed(1)}" r="92" fill="none" stroke="#5a6578" stroke-width="1.2" stroke-opacity="0.35"/>\n`;
+
+    // Spokes and Nodes
+    const originPt = projectPoint([0, 0, 0], modelMatrix, sphereBoxSize, sphereBoxSize);
+
+    for (const point of points) {
+        const amp = state[point.index] || { re: 0, im: 0 };
+        const probability = amp.re * amp.re + amp.im * amp.im;
+        if (probability < 1e-5) continue;
+
+        const phase = Math.atan2(amp.im, amp.re);
+        const [r, g, b] = getPhaseToRgb(phase);
+        const color = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        const nodeRadius = Math.max(3, 14 * Math.sqrt(probability));
+
+        const targetPt = projectPoint([point.x, point.y, point.z], modelMatrix, sphereBoxSize, sphereBoxSize);
+        if (targetPt && originPt) {
+            const tx = targetPt[0] + sphereOffsetX;
+            const ty = targetPt[1] + sphereOffsetY;
+            const ox = originPt[0] + sphereOffsetX;
+            const oy = originPt[1] + sphereOffsetY;
+
+            // Spoke
+            svg += `  <line x1="${ox.toFixed(1)}" y1="${oy.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="${color}" stroke-width="2" stroke-opacity="0.85"/>\n`;
+
+            // Node sphere circle
+            svg += `  <circle cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="${nodeRadius.toFixed(1)}" fill="${color}" stroke="#ffffff" stroke-width="0.8"/>\n`;
+
+            // Label
+            const binStr = point.index.toString(2).padStart(N, '0');
+            svg += `  <text x="${tx.toFixed(1)}" y="${(ty - nodeRadius - 4).toFixed(1)}" fill="#e0e0e0" font-size="11" font-weight="bold" text-anchor="middle">|${binStr}⟩</text>\n`;
+        }
+    }
+
+    // Vertical Phase Legend on the right
+    const legendX = 345;
+    const legendY = 60;
+    const legendW = 10;
+    const legendH = 180;
+
+    svg += `  <text x="${legendX + 16}" y="${legendY - 14}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">Phase</text>\n`;
+    svg += `  <rect x="${legendX}" y="${legendY}" width="${legendW}" height="${legendH}" rx="2" fill="url(#qspherePhaseGrad)"/>\n`;
+
+    const legendTicks = [
+        { label: '2π', y: legendY + 4 },
+        { label: '3π/2', y: legendY + legendH * 0.25 + 4 },
+        { label: 'π', y: legendY + legendH * 0.5 + 4 },
+        { label: 'π/2', y: legendY + legendH * 0.75 + 4 },
+        { label: '0', y: legendY + legendH + 4 }
+    ];
+
+    for (const tick of legendTicks) {
+        svg += `  <text x="${legendX + legendW + 8}" y="${tick.y}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="start">${tick.label}</text>\n`;
+    }
+
+    svg += `</svg>`;
+    return svg;
+}
+
+function generateQspherePng() {
+    const canvas = document.querySelector('#canvas');
+    if (!canvas || !threeState) return '';
+
+    // Render current Three.js scene
+    threeState.renderer.render(threeState.scene, threeState.camera);
+
+    const dpr = window.devicePixelRatio || 1;
+    const sphereW = canvas.width;
+    const sphereH = canvas.height;
+    const legendExtraW = Math.floor(75 * dpr);
+    const totalW = sphereW + legendExtraW;
+    const totalH = sphereH;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = totalW;
+    offscreen.height = totalH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return canvas.toDataURL('image/png');
+
+    // Dark background
+    // (Transparent background preserved)
+
+    // Draw WebGL canvas
+    ctx.drawImage(canvas, 0, 0);
+
+    // Draw 3D projected HTML labels
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#e0e0e0';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const cssSphereW = sphereW / dpr;
+    const cssSphereH = sphereH / dpr;
+    const modelMatrix = rotateMatrix(...(window.rotationAngles || [0.3, 0.0, 0.0]), threeState._projMatrix);
+
+    for (const item of _qsLabelData) {
+        const pt = projectPoint(item.pos, modelMatrix, cssSphereW, cssSphereH);
+        if (pt) {
+            ctx.fillText(item.el.textContent, pt[0], pt[1]);
+        }
+    }
+    ctx.shadowBlur = 0;
+
+    // Draw vertical phase legend
+    const legendX = cssSphereW + 15;
+    const legendY = (cssSphereH - 180) / 2;
+    const legendW = 10;
+    const legendH = 180;
+
+    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#e6e6ee';
+    ctx.textAlign = 'center';
+    ctx.fillText('Phase', legendX + 16, legendY - 12);
+
+    for (let y = 0; y < legendH; y++) {
+        const t = legendH > 1 ? 1 - (y / (legendH - 1)) : 0;
+        const phase = t * Math.PI * 2;
+        const [r, g, b] = getPhaseToRgb(phase);
+        ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        ctx.fillRect(legendX, legendY + y, legendW, 1);
+    }
+
+    const ticks = [
+        { label: '2π', y: legendY + 4 },
+        { label: '3π/2', y: legendY + legendH * 0.25 + 4 },
+        { label: 'π', y: legendY + legendH * 0.5 + 4 },
+        { label: 'π/2', y: legendY + legendH * 0.75 + 4 },
+        { label: '0', y: legendY + legendH + 4 }
+    ];
+
+    ctx.textAlign = 'start';
+    ctx.fillStyle = '#e6e6ee';
+    for (const tick of ticks) {
+        ctx.fillText(tick.label, legendX + legendW + 6, tick.y);
+    }
+
+    ctx.restore();
+    return offscreen.toDataURL('image/png');
+}
+
 const qsphereVisualization = {
     id: 'qsphere',
     label: 'Q-sphere',
@@ -441,7 +608,7 @@ const qsphereVisualization = {
 
     animate(lerpFactor = 0.20) {
         if (getIsTransitioning()) {
-            const transition = stepStatevectorTransition(lerpFactor, 1e-4);
+            const transition = stepActiveStatevectorTransition(lerpFactor, 1e-4);
             updateQsphereSceneWithAmplitudes(transition.currentAmplitudes, transition.currentQubits, { rebuildLabels: true });
         }
     },
@@ -460,6 +627,16 @@ const qsphereVisualization = {
 
     clearHover() {
         clearQsphereHover();
+    },
+
+    async export() {
+        const svgContent = generateQsphereSvg();
+        const pngDataUrl = generateQspherePng();
+        return {
+            filenamePrefix: 'qsphere',
+            pngDataUrl,
+            svgContent
+        };
     }
 };
 
@@ -482,7 +659,9 @@ export {
     updateQsphereLabels,
     updateQsphereHover,
     clearQsphereHover,
-    setQsphereHoveredIndex
+    setQsphereHoveredIndex,
+    generateQsphereSvg,
+    generateQspherePng
 };
 
 if (typeof window !== 'undefined') {
@@ -494,7 +673,9 @@ if (typeof window !== 'undefined') {
         buildHammingRings,
         buildQSphereSpokes,
         buildQSphereHoverTargets,
-        updateQsphereSceneWithAmplitudes
+        updateQsphereSceneWithAmplitudes,
+        generateQsphereSvg,
+        generateQspherePng
     };
     window.computeQspherePoints = computeQspherePoints;
     window.buildQNodes = buildQNodes;
@@ -502,3 +683,4 @@ if (typeof window !== 'undefined') {
     window.buildQSphereSpokes = buildQSphereSpokes;
     window.buildQSphereHoverTargets = buildQSphereHoverTargets;
 }
+

@@ -3,53 +3,18 @@ import {
     vec3Normalize,
     vec3Cross,
     vec3Dot,
+    vectorsClose,
     rodriguesRotate,
+    alignmentRotation,
     interpolateVector,
+    distanceToSegment,
     mult,
     createPerspectiveMatrix,
     createTranslationMatrix,
     rotateMatrix,
-    projectPoint
-} from '../math/math.js';
-
-function complexAbs2(value) {
-    return value.re * value.re + value.im * value.im;
-}
-
-function extractQubitBloch(snapshot, targetQubit) {
-    if (!snapshot || snapshot.qubits === 0 || targetQubit >= snapshot.qubits) return [0, 0, 1];
-    const state = snapshot.amplitudes;
-    const qubits = snapshot.qubits;
-    const bit = 1 << (qubits - 1 - targetQubit);
-    let rho00 = 0;
-    let rho11 = 0;
-    let rho10Re = 0;
-    let rho10Im = 0;
-
-    for (let i = 0; i < state.length; i++) {
-        if (i & bit) continue;
-        const j = i | bit;
-        const ci = state[i] || { re: 0, im: 0 };
-        const cj = state[j] || { re: 0, im: 0 };
-        rho00 += complexAbs2(ci);
-        rho11 += complexAbs2(cj);
-        rho10Re += ci.re * cj.re + ci.im * cj.im;
-        rho10Im += ci.re * cj.im - ci.im * cj.re;
-    }
-    return [2 * rho10Re, 2 * rho10Im, rho00 - rho11];
-}
-
-function alignmentRotation(targetVec) {
-    const from = [0, 0, 1];
-    const to = vec3Normalize(targetVec);
-    const dot = vec3Dot(from, to);
-    if (dot > 0.99999) return { axis: [1, 0, 0], angle: 0 };
-    if (dot < -0.99999) return { axis: [1, 0, 0], angle: Math.PI };
-    return {
-        axis: vec3Normalize(vec3Cross(from, to)),
-        angle: Math.acos(Math.max(-1, Math.min(1, dot)))
-    };
-}
+    projectPoint,
+    extractQubitBloch
+} from '../math/index.js';
 
 function buildArrowVertices(blochVec, options) {
     const r = Math.sqrt(blochVec[0] ** 2 + blochVec[1] ** 2 + blochVec[2] ** 2);
@@ -257,27 +222,6 @@ function createArrowMesh(blochVec, material) {
     return group;
 }
 
-function vectorsClose(a, b, epsilon = 1e-3) {
-    return Math.abs(a[0] - b[0]) < epsilon
-        && Math.abs(a[1] - b[1]) < epsilon
-        && Math.abs(a[2] - b[2]) < epsilon;
-}
-
-function distanceToSegment(point, start, end) {
-    const dx = end[0] - start[0];
-    const dy = end[1] - start[1];
-    const lengthSquared = dx * dx + dy * dy;
-    if (lengthSquared < 1e-6) {
-        return Math.hypot(point[0] - start[0], point[1] - start[1]);
-    }
-    const t = Math.max(0, Math.min(1,
-        ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSquared));
-    return Math.hypot(
-        point[0] - (start[0] + t * dx),
-        point[1] - (start[1] + t * dy)
-    );
-}
-
 function updateArrowHover(renderer, event) {
     if (!renderer.hoverInfo) return;
 
@@ -348,7 +292,8 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
         canvas: canvasElement,
         alpha: true,
         antialias: true,
-        premultipliedAlpha: true
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: true
     });
     miniRenderer.setClearColor(0x000000, 0);
     miniRenderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -593,6 +538,221 @@ function replayAnimation() {
 }
 
 
+function generateBlochSvg() {
+    const numQubits = miniRenderers.length;
+    if (numQubits === 0) {
+        return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 300" width="600" height="300"><rect width="100%" height="100%" fill="#0a0e17"/><text x="300" y="150" fill="white" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">No qubits declared</text></svg>`;
+    }
+
+    const cols = numQubits <= 3 ? numQubits : Math.min(4, Math.ceil(Math.sqrt(numQubits)));
+    const rows = Math.ceil(numQubits / cols);
+    const cardW = 270;
+    const cardH = 320;
+    const gap = 24;
+    const totalW = cols * cardW + (cols + 1) * gap;
+    const totalH = rows * cardH + (rows + 1) * gap;
+
+    const labelMap = {
+        'label-zero': '|0⟩',
+        'label-one': '|1⟩',
+        'label-plus': '|+⟩',
+        'label-minus': '|-⟩',
+        'label-i-plus': '|+i⟩',
+        'label-i-minus': '|-i⟩'
+    };
+
+    let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}">\n` +
+        `  <defs>\n` +
+        `    <style>\n` +
+        `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
+        `    </style>\n` +
+        `  </defs>\n`;
+
+    for (let i = 0; i < numQubits; i++) {
+        const renderer = miniRenderers[i];
+        const gridCol = i % cols;
+        const gridRow = Math.floor(i / cols);
+        const cardX = gap + gridCol * (cardW + gap);
+        const cardY = gap + gridRow * (cardH + gap);
+
+        const modelMatrix = rotateMatrix(...renderer.rotation, renderer._projMatrix);
+
+        svg += `  <g transform="translate(${cardX}, ${cardY})">\n`;
+        svg += `    <rect width="${cardW}" height="${cardH}" rx="8" fill="rgba(20, 26, 38, 0.7)" stroke="rgba(255, 255, 255, 0.12)" stroke-width="1"/>\n`;
+        svg += `    <text x="${cardW / 2}" y="24" fill="#e6e6ee" font-size="14" font-weight="bold" text-anchor="middle">Qubit ${i}</text>\n`;
+
+        // Wireframe circles (3 orthogonal planes)
+        const segments = 32;
+        for (let plane = 0; plane < 3; plane++) {
+            const points = [];
+            for (let s = 0; s <= segments; s++) {
+                const a = (s / segments) * 2 * Math.PI;
+                const c = Math.cos(a), sn = Math.sin(a);
+                const pos = plane === 0 ? [c, 0, sn] : (plane === 1 ? [c, sn, 0] : [0, sn, c]);
+                const pt = projectPoint(pos, modelMatrix, cardW, cardW);
+                if (pt) points.push(`${pt[0].toFixed(1)},${(pt[1] + 28).toFixed(1)}`);
+            }
+            if (points.length > 1) {
+                svg += `    <polyline points="${points.join(' ')}" fill="none" stroke="#5a6578" stroke-width="1" stroke-opacity="0.45"/>\n`;
+            }
+        }
+
+        // Axes (X, Y, Z)
+        const axes = [
+            { from: [-1, 0, 0], to: [1, 0, 0] },
+            { from: [0, -1, 0], to: [0, 1, 0] },
+            { from: [0, 0, -1], to: [0, 0, 1] }
+        ];
+        for (const axis of axes) {
+            const p1 = projectPoint(axis.from, modelMatrix, cardW, cardW);
+            const p2 = projectPoint(axis.to, modelMatrix, cardW, cardW);
+            if (p1 && p2) {
+                svg += `    <line x1="${p1[0].toFixed(1)}" y1="${(p1[1] + 28).toFixed(1)}" x2="${p2[0].toFixed(1)}" y2="${(p2[1] + 28).toFixed(1)}" stroke="#5a6578" stroke-width="1" stroke-dasharray="3,3" stroke-opacity="0.6"/>\n`;
+            }
+        }
+
+        // Basis state labels
+        for (const labelDef of blochLabelDefs) {
+            const pt = projectPoint(labelDef.pos, modelMatrix, cardW, cardW);
+            if (pt) {
+                const text = labelMap[labelDef.id] || '';
+                svg += `    <text x="${pt[0].toFixed(1)}" y="${(pt[1] + 32).toFixed(1)}" fill="#e0e0e0" font-size="12" font-weight="bold" text-anchor="middle">${text}</text>\n`;
+            }
+        }
+
+        // State vector arrow
+        const centerPt = projectPoint([0, 0, 0], modelMatrix, cardW, cardW);
+        const tipPt = projectPoint(renderer.currentVector, modelMatrix, cardW, cardW);
+
+        if (centerPt && tipPt) {
+            const dx = tipPt[0] - centerPt[0];
+            const dy = tipPt[1] - centerPt[1];
+            const len = Math.hypot(dx, dy);
+
+            if (len > 3) {
+                const angle = Math.atan2(dy, dx);
+                const headLen = Math.min(10, len * 0.35);
+                const leftAngle = angle + Math.PI * 0.82;
+                const rightAngle = angle - Math.PI * 0.82;
+                const hx1 = tipPt[0] + headLen * Math.cos(leftAngle);
+                const hy1 = tipPt[1] + 28 + headLen * Math.sin(leftAngle);
+                const hx2 = tipPt[0] + headLen * Math.cos(rightAngle);
+                const hy2 = tipPt[1] + 28 + headLen * Math.sin(rightAngle);
+
+                svg += `    <line x1="${centerPt[0].toFixed(1)}" y1="${(centerPt[1] + 28).toFixed(1)}" x2="${tipPt[0].toFixed(1)}" y2="${(tipPt[1] + 28).toFixed(1)}" stroke="#e6edf3" stroke-width="2.5" stroke-linecap="round"/>\n`;
+                svg += `    <polygon points="${tipPt[0].toFixed(1)},${(tipPt[1] + 28).toFixed(1)} ${hx1.toFixed(1)},${hy1.toFixed(1)} ${hx2.toFixed(1)},${hy2.toFixed(1)}" fill="#e6edf3"/>\n`;
+            }
+        }
+
+        // Summary text below sphere
+        const blochZ = renderer.currentVector[1];
+        const prob0 = ((1 + blochZ) / 2 * 100).toFixed(1);
+        const prob1 = ((1 - blochZ) / 2 * 100).toFixed(1);
+        svg += `    <text x="${cardW / 2}" y="${cardH - 12}" fill="rgba(255,255,255,0.75)" font-size="11" font-weight="500" text-anchor="middle">P(|0⟩): ${prob0}%  •  P(|1⟩): ${prob1}%</text>\n`;
+
+        svg += `  </g>\n`;
+    }
+
+    svg += `</svg>`;
+    return svg;
+}
+
+function generateBlochPng() {
+    const numQubits = miniRenderers.length;
+    if (numQubits === 0) return '';
+
+    const cols = numQubits <= 3 ? numQubits : Math.min(4, Math.ceil(Math.sqrt(numQubits)));
+    const rows = Math.ceil(numQubits / cols);
+    const cardW = 270;
+    const cardH = 320;
+    const gap = 24;
+    const dpr = window.devicePixelRatio || 1;
+
+    const totalW = cols * cardW + (cols + 1) * gap;
+    const totalH = rows * cardH + (rows + 1) * gap;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = Math.floor(totalW * dpr);
+    offscreen.height = Math.floor(totalH * dpr);
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return '';
+
+    ctx.scale(dpr, dpr);
+    // (Transparent canvas background preserved)
+
+    const labelMap = {
+        'label-zero': '|0⟩',
+        'label-one': '|1⟩',
+        'label-plus': '|+⟩',
+        'label-minus': '|-⟩',
+        'label-i-plus': '|+i⟩',
+        'label-i-minus': '|-i⟩'
+    };
+
+    for (let i = 0; i < numQubits; i++) {
+        const renderer = miniRenderers[i];
+        if (!renderer || !renderer.threeRenderer) continue;
+
+        // Render current 3D state
+        renderer.threeRenderer.render(renderer.scene, renderer.camera);
+
+        const gridCol = i % cols;
+        const gridRow = Math.floor(i / cols);
+        const cardX = gap + gridCol * (cardW + gap);
+        const cardY = gap + gridRow * (cardH + gap);
+
+        // Card background
+        ctx.fillStyle = 'rgba(20, 26, 38, 0.7)';
+        if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath();
+            ctx.roundRect(cardX, cardY, cardW, cardH, 8);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        } else {
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+        }
+
+        // Title
+        ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#e6e6ee';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`Qubit ${i}`, cardX + cardW / 2, cardY + 20);
+
+        // Draw WebGL canvas
+        ctx.drawImage(renderer.canvas, cardX, cardY + 28, cardW, cardW);
+
+        // Draw labels
+        const modelMatrix = rotateMatrix(...renderer.rotation, renderer._projMatrix);
+        ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#e0e0e0';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+        ctx.shadowBlur = 4;
+
+        for (const labelDef of blochLabelDefs) {
+            const pt = projectPoint(labelDef.pos, modelMatrix, cardW, cardW);
+            if (pt) {
+                const text = labelMap[labelDef.id] || '';
+                ctx.fillText(text, cardX + pt[0], cardY + 28 + pt[1]);
+            }
+        }
+        ctx.shadowBlur = 0;
+
+        // Summary text below sphere
+        const blochZ = renderer.currentVector[1];
+        const prob0 = ((1 + blochZ) / 2 * 100).toFixed(1);
+        const prob1 = ((1 - blochZ) / 2 * 100).toFixed(1);
+        ctx.font = '500 11px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.fillText(`P(|0⟩): ${prob0}%  •  P(|1⟩): ${prob1}%`, cardX + cardW / 2, cardY + cardH - 12);
+    }
+
+    return offscreen.toDataURL('image/png');
+}
+
 const blochVisualization = {
     id: 'bloch',
     label: 'Bloch',
@@ -628,7 +788,17 @@ const blochVisualization = {
         }
     },
 
-    replayAnimation
+    replayAnimation,
+
+    async export() {
+        const svgContent = generateBlochSvg();
+        const pngDataUrl = generateBlochPng();
+        return {
+            filenamePrefix: 'bloch',
+            pngDataUrl,
+            svgContent
+        };
+    }
 };
 
 export default blochVisualization;
@@ -645,7 +815,9 @@ export {
     createLineMaterial,
     createArrowMaterial,
     createSphereWireframe,
-    createArrowMesh
+    createArrowMesh,
+    generateBlochSvg,
+    generateBlochPng
 };
 
 if (typeof window !== 'undefined') {
@@ -656,9 +828,12 @@ if (typeof window !== 'undefined') {
         computeBlochArrow,
         populateQubitColumn,
         destroyMiniRenderers,
-        replayAnimation
+        replayAnimation,
+        generateBlochSvg,
+        generateBlochPng
     };
     window.computeBlochArrow = computeBlochArrow;
     window.extractQubitBloch = extractQubitBloch;
     window.buildArrowVertices = buildArrowVertices;
 }
+

@@ -18,6 +18,7 @@
  * @property {function(MouseEvent, HTMLCanvasElement, number[]): void} [updateHover] - Optional view-specific hover hit-testing
  * @property {function(): void} [clearHover] - Optional view-specific hover clearing
  * @property {function(Float32Array, number, number): void} [updateLabels] - Optional view-specific 3D label projection updater
+ * @property {function(SharedContext=): Promise<{ filenamePrefix: string, pngDataUrl: string, svgContent: string }>} [export] - Export visualization as PNG data URL and SVG content
  */
 
 import statevectorVisualization from './statevector.js';

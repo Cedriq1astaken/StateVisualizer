@@ -10,7 +10,6 @@
 
     <script defer src="dist/qsharpRuntime.bundle.js"></script>
     <script defer src="runtime/qsharpRuntimeUi.js"></script>
-    <script defer src="math/math.js"></script>
     <script defer src="dist/webview.bundle.js"></script>
 
 </head>
@@ -77,6 +76,16 @@
     </div>
 
     <p id="status"></p>
+
+    <div id="footer-actions">
+        <button id="export-btn" class="action-btn" type="button" title="Export visualization as PNG and SVG">
+            <svg class="action-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 2V10M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M2 11V13C2 13.5523 2.44772 14 3 14H13C13.5523 14 14 13.5523 14 13V11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            <span>Export</span>
+        </button>
+    </div>
 </body>
 
 </html>

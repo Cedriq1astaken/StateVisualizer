@@ -79,7 +79,8 @@
     "bundle:webview": "node scripts/build-webview.mjs",
 
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile"
+    "pretest": "npm run compile",
+    "test": "node --test test/**/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

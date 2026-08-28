@@ -1,23 +1,11 @@
 import { getDebugService, loadWasmModule, StepResultId } from 'qsharp-lang';
+import { parseAmplitude, isTrivialState } from '../math/index.js';
 
 let wasmReady;
 
 function ensureWasm(wasmUri) {
     if (!wasmReady) wasmReady = loadWasmModule(wasmUri);
     return wasmReady;
-}
-
-function parseAmplitude(value) {
-    const normalized = String(value || '')
-        .replace(/\s/g, '')
-        .replace(/𝑖/g, 'i')
-        .replace(/[−–—]/g, '-');
-    const complex = normalized.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([+-](?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)i$/i);
-    if (complex) return { re: Number(complex[1]), im: Number(complex[2]) };
-    const imaginary = normalized.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)i$/i);
-    if (imaginary) return { re: 0, im: Number(imaginary[1]) };
-    const real = Number.parseFloat(normalized);
-    return { re: Number.isFinite(real) ? real : 0, im: 0 };
 }
 
 function snapshotFromEntries(entries) {
@@ -37,16 +25,6 @@ function snapshotFromEntries(entries) {
 
 function snapshotSignature(snapshot) {
     return `${snapshot.qubits}:${snapshot.amplitudes.map(value => `${value.re.toPrecision(12)},${value.im.toPrecision(12)}`).join(';')}`;
-}
-
-function isTrivialState(snapshot) {
-    if (!snapshot || snapshot.qubits === 0) return true;
-    const amps = snapshot.amplitudes;
-    if (Math.abs(amps[0].re - 1) > 1e-8 || Math.abs(amps[0].im) > 1e-8) return false;
-    for (let i = 1; i < amps.length; i++) {
-        if (Math.abs(amps[i].re) > 1e-8 || Math.abs(amps[i].im) > 1e-8) return false;
-    }
-    return true;
 }
 
 function formatFailure(message) {

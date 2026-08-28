@@ -1,56 +1,10 @@
-function getQsphereState(result) {
-    if (typeof computeQsphereState === 'function') {
-        return computeQsphereState(result);
-    }
-    if (typeof window !== 'undefined' && typeof window.computeQsphereState === 'function') {
-        return window.computeQsphereState(result);
-    }
-    const states = result?.states || [];
-    const latest = states.length > 0 ? states[states.length - 1] : null;
-    const N = latest?.qubits || result?.qubitsDeclared || 0;
-    const state = latest?.amplitudes || Array.from(
-        { length: 2 ** N },
-        () => ({ re: 0, im: 0 })
-    );
-    return { state, N };
-}
-
-function getPhaseToRgb(phase) {
-    if (typeof phaseToRgb === 'function') {
-        return phaseToRgb(phase);
-    }
-    if (typeof window !== 'undefined' && typeof window.phaseToRgb === 'function') {
-        return window.phaseToRgb(phase);
-    }
-    const deg = ((phase / (2 * Math.PI)) * 360 + 360) % 360;
-    const s = 0.68, l = 0.68;
-    const k = n => (n + deg / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return [f(0), f(8), f(4)];
-}
-
-function formatBasisState(index, qubits) {
-    return `|${index.toString(2).padStart(qubits, '0')}⟩`;
-}
-
-function formatPhasePi(phase) {
-    const twoPi = Math.PI * 2;
-    const normalized = ((phase % twoPi) + twoPi) % twoPi;
-    const units = normalized / Math.PI;
-    const known = [
-        [0, '0'],
-        [0.5, 'π/2'],
-        [1, 'π'],
-        [1.5, '3π/2'],
-        [2, '0']
-    ];
-
-    for (const [value, label] of known) {
-        if (Math.abs(units - value) < 0.03) return label;
-    }
-    return `${units.toFixed(2)}π`;
-}
+import {
+    getQsphereState,
+    getPhaseToRgb,
+    formatBasisState,
+    formatPhasePi,
+    stepStatevectorTransition
+} from '../math/index.js';
 
 let statevectorContainer = null;
 let statevectorCanvas = null;
@@ -347,51 +301,15 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
     ctx.restore();
 }
 
-function stepStatevectorTransition(lerpFactor = 0.25, threshold = 1e-4) {
+function stepStatevectorTransitionInternal(lerpFactor = 0.25, threshold = 1e-4) {
     if (!isTransitioning) {
         return { isTransitioning: false, currentAmplitudes, currentQubits };
     }
-
-    let anyDifference = false;
-    for (let i = 0; i < targetAmplitudes.length; i++) {
-        const curr = currentAmplitudes[i] || (currentAmplitudes[i] = { re: 0, im: 0 });
-        const target = targetAmplitudes[i] || { re: 0, im: 0 };
-
-        const currR = Math.sqrt(curr.re * curr.re + curr.im * curr.im);
-        const targetR = Math.sqrt(target.re * target.re + target.im * target.im);
-
-        const currTheta = Math.atan2(curr.im, curr.re);
-        const targetTheta = Math.atan2(target.im, target.re);
-
-        const diffR = targetR - currR;
-        let diffTheta = targetTheta - currTheta;
-
-        while (diffTheta < -Math.PI) diffTheta += Math.PI * 2;
-        while (diffTheta > Math.PI) diffTheta -= Math.PI * 2;
-
-        const rChanged = Math.abs(diffR) > threshold;
-        const thetaChanged = targetR > threshold && Math.abs(diffTheta) > threshold;
-
-        if (rChanged || thetaChanged) {
-            const nextR = currR + diffR * lerpFactor;
-            const nextTheta = currTheta + (thetaChanged ? diffTheta * lerpFactor : 0);
-
-            curr.re = nextR * Math.cos(nextTheta);
-            curr.im = nextR * Math.sin(nextTheta);
-            anyDifference = true;
-        } else {
-            curr.re = target.re;
-            curr.im = target.im;
-        }
-    }
-
-    if (!anyDifference) {
-        isTransitioning = false;
-    }
-
+    const result = stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFactor, threshold);
+    isTransitioning = result.isTransitioning;
     return {
         isTransitioning,
-        currentAmplitudes,
+        currentAmplitudes: result.currentAmplitudes,
         currentQubits
     };
 }
@@ -406,6 +324,189 @@ function getCurrentAmplitudes() {
 
 function getCurrentQubits() {
     return currentQubits;
+}
+
+function generateStatevectorSvg() {
+    const amplitudes = currentAmplitudes.length > 0 ? currentAmplitudes : (lastResult ? getQsphereState(lastResult).state : []);
+    const N = currentQubits || (lastResult ? getQsphereState(lastResult).N : 0);
+    const numStates = 2 ** N;
+
+    const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
+    const paddingLeft = 52;
+    const paddingRight = 20;
+    const paddingTop = 28;
+    const plotHeight = 210;
+    const paddingBottom = 42;
+    const legendHeight = 56;
+    const chartHeight = paddingTop + plotHeight + paddingBottom;
+    const totalHeight = chartHeight + legendHeight;
+
+    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
+    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
+    const minPlotWidth = numStates * (minBarWidth + barGap);
+    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
+    const plotWidth = totalWidth - paddingLeft - paddingRight;
+
+    let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${totalHeight}" width="${totalWidth}" height="${totalHeight}">\n` +
+        `  <defs>\n` +
+        `    <linearGradient id="phaseGradient" x1="0%" y1="0%" x2="100%" y2="0%">\n`;
+
+    const gradStops = [0, 0.25, 0.5, 0.75, 1.0];
+    for (const stop of gradStops) {
+        const [r, g, b] = getPhaseToRgb(stop * Math.PI * 2);
+        svg += `      <stop offset="${(stop * 100).toFixed(0)}%" stop-color="rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})"/>\n`;
+    }
+    svg += `    </linearGradient>\n` +
+        `    <style>\n` +
+        `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
+        `    </style>\n` +
+        `  </defs>\n`;
+
+    // Y-Axis grid lines & ticks
+    const yTicks = [1.0, 0.75, 0.5, 0.25, 0.0];
+    for (const tick of yTicks) {
+        const y = paddingTop + (1.0 - tick) * plotHeight;
+        const isBase = tick === 0.0;
+        const strokeColor = isBase ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.20)';
+        const strokeWidth = isBase ? 1.5 : 1;
+        const dash = isBase ? '' : 'stroke-dasharray="4,4"';
+        svg += `  <line x1="${paddingLeft}" y1="${y}" x2="${totalWidth - paddingRight}" y2="${y}" stroke="${strokeColor}" stroke-width="${strokeWidth}" ${dash}/>\n`;
+        svg += `  <text x="${paddingLeft - 8}" y="${y + 4}" fill="rgba(255, 255, 255, 0.85)" font-size="11" font-weight="bold" text-anchor="end">${tick.toFixed(2)}</text>\n`;
+    }
+
+    if (numStates === 0 || N === 0) {
+        svg += `  <text x="${totalWidth / 2}" y="${paddingTop + plotHeight / 2}" fill="rgba(255, 255, 255, 0.75)" font-size="13" font-weight="bold" text-anchor="middle">No quantum state declared.</text>\n` +
+            `</svg>`;
+        return svg;
+    }
+
+    // Bars
+    const step = plotWidth / numStates;
+    const barWidth = Math.max(14, Math.min(52, step - barGap));
+
+    for (let i = 0; i < numStates; i++) {
+        const amp = amplitudes[i] || { re: 0, im: 0 };
+        const magnitude = Math.sqrt(amp.re * amp.re + amp.im * amp.im);
+        const phase = Math.atan2(amp.im, amp.re);
+        const [r, g, b] = getPhaseToRgb(phase);
+        const color = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+
+        const barX = paddingLeft + i * step + (step - barWidth) / 2;
+        const barHeight = Math.max(0, Math.min(plotHeight, magnitude * plotHeight));
+        const barY = paddingTop + plotHeight - barHeight;
+        const centerX = barX + barWidth / 2;
+
+        if (barHeight > 1) {
+            svg += `  <rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="3" fill="${color}"/>\n`;
+        } else {
+            svg += `  <rect x="${barX}" y="${paddingTop + plotHeight - 1.5}" width="${barWidth}" height="1.5" fill="rgba(255, 255, 255, 0.35)"/>\n`;
+        }
+
+        if (magnitude >= 0.05) {
+            const labelY = Math.max(paddingTop - 2, barY - 4);
+            svg += `  <text x="${centerX}" y="${labelY}" fill="rgba(255, 255, 255, 0.95)" font-size="10" font-weight="bold" text-anchor="middle">${magnitude.toFixed(2)}</text>\n`;
+        }
+
+        const labelText = formatBasisState(i, N);
+        const labelY = paddingTop + plotHeight + 18;
+        if (step < 32 && numStates > 8) {
+            svg += `  <text x="${centerX}" y="${labelY}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="end" transform="rotate(-45, ${centerX}, ${labelY})">${labelText}</text>\n`;
+        } else {
+            svg += `  <text x="${centerX}" y="${labelY}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="middle">${labelText}</text>\n`;
+        }
+    }
+
+    // Phase horizontal legend at the bottom
+    const legendWidth = 220;
+    const legendBarHeight = 10;
+    const legendX = (totalWidth - legendWidth) / 2;
+    const legendY = chartHeight + 18;
+
+    svg += `  <text x="${totalWidth / 2}" y="${chartHeight + 8}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">Phase</text>\n`;
+    svg += `  <rect x="${legendX}" y="${legendY}" width="${legendWidth}" height="${legendBarHeight}" rx="2" fill="url(#phaseGradient)"/>\n`;
+
+    const legendTicks = [
+        { label: '0', x: legendX },
+        { label: 'π/2', x: legendX + legendWidth * 0.25 },
+        { label: 'π', x: legendX + legendWidth * 0.5 },
+        { label: '3π/2', x: legendX + legendWidth * 0.75 },
+        { label: '2π', x: legendX + legendWidth }
+    ];
+
+    for (const tick of legendTicks) {
+        svg += `  <text x="${tick.x}" y="${legendY + legendBarHeight + 14}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">${tick.label}</text>\n`;
+    }
+
+    svg += `</svg>`;
+    return svg;
+}
+
+function generateStatevectorPng() {
+    initStatevectorElements();
+    if (!statevectorCanvas) return '';
+
+    const dpr = window.devicePixelRatio || 1;
+    const chartW = statevectorCanvas.width;
+    const chartH = statevectorCanvas.height;
+    const legendExtraH = Math.floor(64 * dpr);
+    const totalW = chartW;
+    const totalH = chartH + legendExtraH;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = totalW;
+    offscreen.height = totalH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return statevectorCanvas.toDataURL('image/png');
+
+    // Fill dark background
+    // (Transparent background preserved)
+
+    // Draw main chart canvas
+    ctx.drawImage(statevectorCanvas, 0, 0);
+
+    // Draw Phase legend at bottom
+    const cssTotalW = totalW / dpr;
+    const cssChartH = chartH / dpr;
+    const legendW = 220;
+    const legendBarH = 10;
+    const legendX = (cssTotalW - legendW) / 2;
+    const legendY = cssChartH + 20;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#e6e6ee';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Phase', cssTotalW / 2, legendY - 5);
+
+    // Draw gradient bar
+    for (let x = 0; x < legendW; x++) {
+        const t = legendW > 1 ? x / (legendW - 1) : 0;
+        const phase = t * Math.PI * 2;
+        const [r, g, b] = getPhaseToRgb(phase);
+        ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        ctx.fillRect(legendX + x, legendY, 1, legendBarH);
+    }
+
+    // Ticks
+    const ticks = [
+        { label: '0', x: legendX },
+        { label: 'π/2', x: legendX + legendW * 0.25 },
+        { label: 'π', x: legendX + legendW * 0.5 },
+        { label: '3π/2', x: legendX + legendW * 0.75 },
+        { label: '2π', x: legendX + legendW }
+    ];
+
+    ctx.textBaseline = 'top';
+    for (const tick of ticks) {
+        ctx.fillText(tick.label, tick.x, legendY + legendBarH + 5);
+    }
+
+    ctx.restore();
+    return offscreen.toDataURL('image/png');
 }
 
 const statevectorVisualization = {
@@ -448,7 +549,7 @@ const statevectorVisualization = {
 
     animate(lerpFactor = 0.20) {
         if (isTransitioning) {
-            const transition = stepStatevectorTransition(lerpFactor, 1e-4);
+            const transition = stepStatevectorTransitionInternal(lerpFactor, 1e-4);
             drawStateVectorHistogramWithAmplitudes(transition.currentAmplitudes, transition.currentQubits);
         }
     },
@@ -460,6 +561,16 @@ const statevectorVisualization = {
             const { state, N } = getQsphereState(lastResult);
             drawStateVectorHistogramWithAmplitudes(state, N);
         }
+    },
+
+    async export() {
+        const svgContent = generateStatevectorSvg();
+        const pngDataUrl = generateStatevectorPng();
+        return {
+            filenamePrefix: 'statevector',
+            pngDataUrl,
+            svgContent
+        };
     }
 };
 
@@ -470,6 +581,7 @@ export {
     initStatevectorElements,
     renderStateVectorHistogram,
     drawStateVectorHistogramWithAmplitudes,
+    stepStatevectorTransitionInternal as stepActiveStatevectorTransition,
     stepStatevectorTransition,
     getIsTransitioning,
     getCurrentAmplitudes,
@@ -477,7 +589,9 @@ export {
     formatBasisState,
     formatPhasePi,
     getQsphereState,
-    getPhaseToRgb
+    getPhaseToRgb,
+    generateStatevectorSvg,
+    generateStatevectorPng
 };
 
 if (typeof window !== 'undefined') {
@@ -486,6 +600,7 @@ if (typeof window !== 'undefined') {
         initStatevectorElements,
         renderStateVectorHistogram,
         drawStateVectorHistogramWithAmplitudes,
+        stepActiveStatevectorTransition: stepStatevectorTransitionInternal,
         stepStatevectorTransition,
         getIsTransitioning,
         getCurrentAmplitudes,
@@ -493,6 +608,9 @@ if (typeof window !== 'undefined') {
         formatBasisState,
         formatPhasePi,
         getQsphereState,
-        getPhaseToRgb
+        getPhaseToRgb,
+        generateStatevectorSvg,
+        generateStatevectorPng
     };
 }
+
