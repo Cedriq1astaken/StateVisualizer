@@ -103,9 +103,7 @@ function setVisualizationMode(mode) {
     }
 
     if (threeState) {
-        if (mode === 'qsphere') {
-            resizeRenderer(threeState);
-        }
+        resizeRenderer(threeState);
         renderScene();
     }
 }
@@ -228,8 +226,8 @@ async function initScene() {
 // Mouse interaction for 3D sphere rotation and hover
 canvas.addEventListener('mousedown', e => {
     isDragging = true;
-    const qsphereViz = getVisualization('qsphere');
-    if (qsphereViz?.clearHover) qsphereViz.clearHover();
+    const activeViz = getVisualization(currentMode);
+    if (activeViz?.clearHover) activeViz.clearHover();
     previousMousePosition = { x: e.clientX, y: e.clientY };
 });
 
@@ -246,17 +244,17 @@ canvas.addEventListener('mousemove', e => {
 
         previousMousePosition = { x: e.clientX, y: e.clientY };
     } else {
-        const qsphereViz = getVisualization('qsphere');
-        if (qsphereViz?.updateHover) {
-            qsphereViz.updateHover(e, canvas, rotationAngles);
+        const activeViz = getVisualization(currentMode);
+        if (activeViz?.updateHover) {
+            activeViz.updateHover(e, canvas, rotationAngles);
         }
     }
 });
 
 canvas.addEventListener('mouseleave', () => {
     isDragging = false;
-    const qsphereViz = getVisualization('qsphere');
-    if (qsphereViz?.clearHover) qsphereViz.clearHover();
+    const activeViz = getVisualization(currentMode);
+    if (activeViz?.clearHover) activeViz.clearHover();
 });
 
 window.addEventListener('mouseup', () => {
@@ -280,9 +278,8 @@ function frame() {
         threeState.scene.rotation.set(rotationAngles[0], rotationAngles[1], rotationAngles[2]);
         const modelMatrix = rotateMatrix(...rotationAngles, threeState._projMatrix);
         const rect = canvas.getBoundingClientRect();
-        const qsphereViz = getVisualization('qsphere');
-        if (qsphereViz?.updateLabels) {
-            qsphereViz.updateLabels(modelMatrix, rect.width, rect.height);
+        if (activeViz?.updateLabels) {
+            activeViz.updateLabels(modelMatrix, rect.width, rect.height);
         }
         try {
             renderScene();
@@ -334,9 +331,13 @@ let sourceUpdateGeneration = 0;
 window.addEventListener('message', async event => {
     const message = event.data;
     if (message.command === 'replayAnimation') {
-        const blochViz = getVisualization('bloch');
-        if (blochViz?.replayAnimation) {
-            blochViz.replayAnimation();
+        const activeViz = getVisualization(currentMode);
+        if (activeViz?.replayAnimation) {
+            activeViz.replayAnimation();
+        } else {
+            for (const viz of getAllVisualizations()) {
+                if (viz.replayAnimation) viz.replayAnimation();
+            }
         }
         return;
     }

@@ -14,7 +14,17 @@
     "onLanguage:qsharp"
   ],
   "main": "./out/extension.js",
+  "files": [
+    "out",
+    "dist",
+    "assets",
+    "samples",
+    "src/webview",
+    "package.json",
+    "README.md"
+  ],
   "contributes": {
+
     "commands": [
       {
         "command": "qsphere.openVisualizer",

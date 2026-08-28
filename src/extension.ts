@@ -7,6 +7,13 @@ export function activate(context: vscode.ExtensionContext) {
 
     let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
     let activePanel: vscode.WebviewPanel | undefined;
+    let pendingInspectPayload: {
+        fileName: string;
+        code: string;
+        targetLine: number;
+        lineText: string;
+        targetOp?: { name: string; startLine: number; endLine: number };
+    } | null = null;
 
     const openVisualizerDisposable = vscode.commands.registerCommand('qsphere.openVisualizer', (targetOp?: { name: string, startLine: number, endLine: number }) => {
         if (targetOp) {
@@ -15,12 +22,12 @@ export function activate(context: vscode.ExtensionContext) {
 
         const activeEditor = vscode.window.activeTextEditor;
         const sourceDocument = activeEditor?.document;
-        const fileName = sourceDocument?.fileName || 'test.qs';
+        const defaultSamplePath = path.join(context.extensionPath, 'samples', 'test.qs');
+        const fileName = sourceDocument?.fileName || defaultSamplePath;
         let codeContent = sourceDocument?.getText() || '';
 
-        if (!codeContent) {
-            const testQsPath = path.join(context.extensionPath, 'samples', 'test.qs');
-            if (fs.existsSync(testQsPath)) codeContent = fs.readFileSync(testQsPath, 'utf8');
+        if (!codeContent && fs.existsSync(defaultSamplePath)) {
+            codeContent = fs.readFileSync(defaultSamplePath, 'utf8');
         }
 
         const titleName = activeTargetOp?.name ? `Qsphere: ${activeTargetOp.name}` : 'Qsphere Quantum Visualizer';
@@ -39,13 +46,20 @@ export function activate(context: vscode.ExtensionContext) {
 
         panel.webview.html = getWebviewContent(context, panel.webview);
 
-
         const postSource = (command: 'init' | 'update', code: string, sourceName: string) => {
             panel.webview.postMessage({ command, data: { fileName: sourceName, code, targetOp: activeTargetOp } });
         };
 
         const readyDisposable = panel.webview.onDidReceiveMessage(message => {
             if (message.command !== 'ready') return;
+            if (pendingInspectPayload) {
+                panel.webview.postMessage({
+                    command: 'inspectLine',
+                    data: pendingInspectPayload
+                });
+                pendingInspectPayload = null;
+                return;
+            }
             const currentEditor = vscode.window.activeTextEditor;
             postSource(
                 'init',
@@ -61,6 +75,14 @@ export function activate(context: vscode.ExtensionContext) {
         const changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
             if (!event.document.fileName.endsWith('.qs')) return;
             if (trackedUri && event.document.uri.toString() !== trackedUri) return;
+
+            // Clear any previous line inspection decoration when text is edited / newlines inserted
+            vscode.window.visibleTextEditors.forEach(editor => {
+                if (editor.document.uri.toString() === event.document.uri.toString()) {
+                    editor.setDecorations(lineHighlightDecoration, []);
+                }
+            });
+
             if (updateTimer) clearTimeout(updateTimer);
             updateTimer = setTimeout(() => {
                 postSource('update', event.document.getText(), event.document.fileName);
@@ -80,6 +102,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const lineHighlightDecoration = vscode.window.createTextEditorDecorationType({
         isWholeLine: true,
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
         backgroundColor: 'rgba(56, 189, 248, 0.22)',
         border: '1px solid rgba(56, 189, 248, 0.60)',
         borderRadius: '3px',
@@ -93,6 +116,50 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
+    function findMainOperation(doc: vscode.TextDocument): { name: string, startLine: number, endLine: number } | null {
+        const operationPattern = /^\s*operation\s+([A-Za-z_][A-Za-z0-9_]*)/;
+        let mainOp: { name: string, startLine: number, endLine: number } | null = null;
+        let firstOp: { name: string, startLine: number, endLine: number } | null = null;
+
+        for (let line = 0; line < doc.lineCount; line++) {
+            const lineText = doc.lineAt(line).text;
+            const match = lineText.match(operationPattern);
+            if (!match) continue;
+            const opName = match[1];
+
+            let braceCount = 0;
+            let foundOpenBrace = false;
+            let endLine = line;
+            for (let l = line; l < doc.lineCount; l++) {
+                const currentText = doc.lineAt(l).text;
+                for (const char of currentText) {
+                    if (char === '{') {
+                        braceCount++;
+                        foundOpenBrace = true;
+                    } else if (char === '}') {
+                        braceCount--;
+                        if (foundOpenBrace && braceCount === 0) {
+                            endLine = l;
+                            break;
+                        }
+                    }
+                }
+                if (foundOpenBrace && braceCount === 0) break;
+                endLine = l;
+            }
+
+            const opInfo = { name: opName, startLine: line, endLine };
+            if (!firstOp) firstOp = opInfo;
+
+            const isEntryPoint = (line > 0 && doc.lineAt(line - 1).text.includes('@EntryPoint')) || opName === 'Main';
+            if (isEntryPoint) {
+                mainOp = opInfo;
+                break;
+            }
+        }
+
+        return mainOp || firstOp;
+    }
 
     const inspectCurrentLineDisposable = vscode.commands.registerCommand('qsphere.inspectCurrentLine', () => {
         const activeEditor = vscode.window.activeTextEditor;
@@ -101,45 +168,53 @@ export function activate(context: vscode.ExtensionContext) {
         const document = activeEditor.document;
         if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return;
 
+        const mainOp = findMainOperation(document);
         const cursorLine = activeEditor.selection.active.line;
-        const lineText = document.lineAt(cursorLine).text.trim();
 
-        // Highlight the line being visualized
-        const lineRange = document.lineAt(cursorLine).range;
+        // Shift + Enter only activates when inside Main
+        if (!mainOp || cursorLine < mainOp.startLine || cursorLine > mainOp.endLine) {
+            return;
+        }
+
+        // If on an empty line, find the nearest preceding code line within Main
+        let effectiveLine = cursorLine;
+        while (effectiveLine > mainOp.startLine && document.lineAt(effectiveLine).text.trim().length === 0) {
+            effectiveLine--;
+        }
+
+        const lineText = document.lineAt(effectiveLine).text.trim();
+
+        // Highlight the single line being visualized
+        const lineRange = document.lineAt(effectiveLine).range;
         activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
 
-        // Advance cursor to the end of the next line
-        if (cursorLine + 1 < document.lineCount) {
-            const nextLine = cursorLine + 1;
+
+        // Advance cursor to the next non-empty code line within Main
+        let nextLine = cursorLine + 1;
+        while (nextLine < mainOp.endLine && document.lineAt(nextLine).text.trim().length === 0) {
+            nextLine++;
+        }
+        if (nextLine <= mainOp.endLine) {
             const nextLineEnd = document.lineAt(nextLine).range.end;
             activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
             activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
         }
 
+        const payload = {
+            fileName: document.fileName,
+            code: document.getText(),
+            targetLine: effectiveLine,
+            lineText,
+            targetOp: mainOp
+        };
+
         if (!activePanel) {
-            vscode.commands.executeCommand('qsphere.openVisualizer');
-            setTimeout(() => {
-                activePanel?.webview.postMessage({
-                    command: 'inspectLine',
-                    data: {
-                        fileName: document.fileName,
-                        code: document.getText(),
-                        targetLine: cursorLine,
-                        lineText,
-                        targetOp: activeTargetOp
-                    }
-                });
-            }, 300);
+            pendingInspectPayload = payload;
+            vscode.commands.executeCommand('qsphere.openVisualizer', mainOp);
         } else {
             activePanel.webview.postMessage({
                 command: 'inspectLine',
-                data: {
-                    fileName: document.fileName,
-                    code: document.getText(),
-                    targetLine: cursorLine,
-                    lineText,
-                    targetOp: activeTargetOp
-                }
+                data: payload
             });
         }
     });
@@ -148,79 +223,26 @@ export function activate(context: vscode.ExtensionContext) {
         activePanel?.webview.postMessage({ command: 'replayAnimation' });
     });
 
-
-
     const codeLensProvider = vscode.languages.registerCodeLensProvider(
         [{ pattern: '**/*.qs' }, { language: 'qsharp' }],
         {
             provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
                 if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return [];
-                const lenses: vscode.CodeLens[] = [];
-                const operationPattern = /^\s*operation\s+([A-Za-z_][A-Za-z0-9_]*)/;
-                const operationRanges = new Map<string, { startLine: number, endLine: number }>();
+                const mainOp = findMainOperation(document);
+                if (!mainOp) return [];
 
-                for (let line = 0; line < document.lineCount; line++) {
-                    const match = document.lineAt(line).text.match(operationPattern);
-                    if (!match) continue;
-                    const opName = match[1];
-
-                    let braceCount = 0;
-                    let foundOpenBrace = false;
-                    let endLine = line;
-                    for (let l = line; l < document.lineCount; l++) {
-                        const lineText = document.lineAt(l).text;
-                        for (const char of lineText) {
-                            if (char === '{') {
-                                braceCount++;
-                                foundOpenBrace = true;
-                            } else if (char === '}') {
-                                braceCount--;
-                                if (foundOpenBrace && braceCount === 0) {
-                                    endLine = l;
-                                    break;
-                                }
-                            }
-                        }
-                        if (foundOpenBrace && braceCount === 0) break;
-                        endLine = l;
-                    }
-
-                    operationRanges.set(opName, { startLine: line, endLine });
-
-                    if (opName === 'Main') {
-                        lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
-                            title: 'State (Main)',
-                            command: 'qsphere.openVisualizer',
-                            arguments: [{ name: opName, startLine: line, endLine }],
-                            tooltip: 'Click to open Qsphere visualizer for Main'
-                        }));
-                    }
-                }
-
-                const operationCallPattern = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
-                for (let line = 0; line < document.lineCount; line++) {
-                    const lineText = document.lineAt(line).text;
-                    if (operationPattern.test(lineText)) continue;
-
-                    operationCallPattern.lastIndex = 0;
-                    const call = operationCallPattern.exec(lineText);
-                    if (!call) continue;
-
-                    const opName = call[1];
-                    const operation = operationRanges.get(opName);
-                    if (!operation) continue;
-
-                    lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
-                        title: `State (${opName})`,
+                return [
+                    new vscode.CodeLens(new vscode.Range(mainOp.startLine, 0, mainOp.startLine, 0), {
+                        title: 'State',
                         command: 'qsphere.openVisualizer',
-                        arguments: [{ name: opName, ...operation }],
-                        tooltip: `Click to open Qsphere visualizer for this ${opName} call`
-                    }));
-                }
-                return lenses;
+                        arguments: [mainOp],
+                        tooltip: 'Open Qsphere visualizer for Main'
+                    })
+                ];
             }
         }
     );
+
     context.subscriptions.push(
         openVisualizerDisposable,
         inspectCurrentLineDisposable,
@@ -232,7 +254,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 
 
-export function deactivate() {}
+
+export function deactivate() { }
 
 function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Webview): string {
     const extRoot = context.extensionPath;
@@ -259,6 +282,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
         .replace('assets/wasm/qsc_wasm_bg.wasm', uri(wasmPath))
         .replace('samples/test.qs', uri(testQsPath));
 }
+
 
 
 
