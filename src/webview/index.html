@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qsphere Visualizer</title>
+
+    <link rel="stylesheet" href="styles.css">
+
+    <script defer src="dist/qsharpRuntime.bundle.js"></script>
+    <script defer src="runtime/qsharpRuntimeUi.js"></script>
+    <script defer src="math/math.js"></script>
+    <script defer src="dist/webview.bundle.js"></script>
+
+</head>
+
+<body>
+
+    <h1 id="title">Qubit State Visualization</h1>
+    <div id="view-tabs" role="tablist" aria-label="Visualization mode">
+        <button class="view-tab active" type="button" role="tab" aria-selected="true" data-view-mode="statevector">
+            Statevector
+        </button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="bloch">
+            Bloch
+        </button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="qsphere">
+            Q-sphere
+        </button>
+    </div>
+
+    <div id="statevector-container">
+        <div id="statevector-chart-wrapper">
+            <canvas id="statevector-canvas"></canvas>
+        </div>
+        <div id="statevector-phase-legend" class="phase-horizontal-legend" aria-label="Statevector phase color legend">
+            <div class="phase-label phase-title">Phase</div>
+            <div class="phase-horizontal-body">
+                <canvas class="phase-horizontal-bar-canvas" width="220" height="10"></canvas>
+                <div class="phase-horizontal-ticks">
+                    <span class="phase-label">0</span>
+                    <span class="phase-label">π/2</span>
+                    <span class="phase-label">π</span>
+                    <span class="phase-label">3π/2</span>
+                    <span class="phase-label">2π</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="qsphere-view-wrapper">
+        <div id="container">
+            <canvas id="canvas" data-qsharp-wasm="assets/wasm/qsc_wasm_bg.wasm" data-test-qs="samples/test.qs"></canvas>
+
+            <div id="qs-labels"></div>
+        </div>
+
+
+        <div id="qsphere-phase-legend" class="phase-column-legend" aria-label="Q-sphere phase color legend">
+            <div class="phase-label phase-title">Phase</div>
+            <div class="phase-column-body">
+                <canvas class="phase-bar-canvas" width="10" height="180"></canvas>
+                <div class="phase-ticks">
+                    <span class="phase-label">2π</span>
+                    <span class="phase-label">3π/2</span>
+                    <span class="phase-label">π</span>
+                    <span class="phase-label">π/2</span>
+                    <span class="phase-label">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <div id="qubit-column"></div>
+    </div>
+
+    <p id="status"></p>
+</body>
+
+</html>

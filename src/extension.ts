@@ -19,7 +19,7 @@ export function activate(context: vscode.ExtensionContext) {
         let codeContent = sourceDocument?.getText() || '';
 
         if (!codeContent) {
-            const testQsPath = path.join(context.extensionPath, 'src', 'test.qs');
+            const testQsPath = path.join(context.extensionPath, 'samples', 'test.qs');
             if (fs.existsSync(testQsPath)) codeContent = fs.readFileSync(testQsPath, 'utf8');
         }
 
@@ -32,12 +32,13 @@ export function activate(context: vscode.ExtensionContext) {
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
-                localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'src'))]
+                localResourceRoots: [vscode.Uri.file(context.extensionPath)]
             }
         );
         activePanel = panel;
 
         panel.webview.html = getWebviewContent(context, panel.webview);
+
 
         const postSource = (command: 'init' | 'update', code: string, sourceName: string) => {
             panel.webview.postMessage({ command, data: { fileName: sourceName, code, targetOp: activeTargetOp } });
@@ -71,8 +72,27 @@ export function activate(context: vscode.ExtensionContext) {
             if (activePanel === panel) activePanel = undefined;
             readyDisposable.dispose();
             changeDisposable.dispose();
+            vscode.window.visibleTextEditors.forEach(editor => {
+                editor.setDecorations(lineHighlightDecoration, []);
+            });
         });
     });
+
+    const lineHighlightDecoration = vscode.window.createTextEditorDecorationType({
+        isWholeLine: true,
+        backgroundColor: 'rgba(56, 189, 248, 0.22)',
+        border: '1px solid rgba(56, 189, 248, 0.60)',
+        borderRadius: '3px',
+        overviewRulerColor: '#38bdf8',
+        overviewRulerLane: vscode.OverviewRulerLane.Full,
+        after: {
+            contentText: '  ◀ Visualized State',
+            color: 'rgba(56, 189, 248, 0.85)',
+            fontStyle: 'italic',
+            fontWeight: '600'
+        }
+    });
+
 
     const inspectCurrentLineDisposable = vscode.commands.registerCommand('qsphere.inspectCurrentLine', () => {
         const activeEditor = vscode.window.activeTextEditor;
@@ -83,6 +103,18 @@ export function activate(context: vscode.ExtensionContext) {
 
         const cursorLine = activeEditor.selection.active.line;
         const lineText = document.lineAt(cursorLine).text.trim();
+
+        // Highlight the line being visualized
+        const lineRange = document.lineAt(cursorLine).range;
+        activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
+
+        // Advance cursor to the end of the next line
+        if (cursorLine + 1 < document.lineCount) {
+            const nextLine = cursorLine + 1;
+            const nextLineEnd = document.lineAt(nextLine).range.end;
+            activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
+            activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
+        }
 
         if (!activePanel) {
             vscode.commands.executeCommand('qsphere.openVisualizer');
@@ -115,6 +147,7 @@ export function activate(context: vscode.ExtensionContext) {
     const replayAnimationDisposable = vscode.commands.registerCommand('qsphere.replayAnimation', () => {
         activePanel?.webview.postMessage({ command: 'replayAnimation' });
     });
+
 
 
     const codeLensProvider = vscode.languages.registerCodeLensProvider(
@@ -188,39 +221,44 @@ export function activate(context: vscode.ExtensionContext) {
             }
         }
     );
-    context.subscriptions.push(openVisualizerDisposable, inspectCurrentLineDisposable, replayAnimationDisposable, codeLensProvider);
+    context.subscriptions.push(
+        openVisualizerDisposable,
+        inspectCurrentLineDisposable,
+        replayAnimationDisposable,
+        codeLensProvider,
+        lineHighlightDecoration
+    );
 }
+
 
 
 export function deactivate() {}
 
 function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Webview): string {
-    const sourceRoot = path.join(context.extensionPath, 'src');
+    const extRoot = context.extensionPath;
 
-    const templatePath = path.join(sourceRoot, 'webview.html');
-    const cssPath = path.join(sourceRoot, 'webview.css');
-    const runtimePath = path.join(sourceRoot, 'script', 'qsharpRuntime.bundle.js');
-    const runtimeUiPath = path.join(sourceRoot, 'script', 'qsharpRuntimeUi.js');
-    const mathJsPath = path.join(sourceRoot, 'script', 'math.js');
-    const blochVectorPath = path.join(sourceRoot, 'script', 'blochVector.js');
-    const qsphereVectorPath = path.join(sourceRoot, 'script', 'qsphereVector.js');
-    const webviewBundlePath = path.join(sourceRoot, 'script', 'webview.bundle.js');
-    const wasmPath = path.join(sourceRoot, 'wasm', 'qsc_wasm_bg.wasm');
-    const testQsPath = path.join(sourceRoot, 'test.qs');
+    const templatePath = path.join(extRoot, 'src', 'webview', 'index.html');
+    const cssPath = path.join(extRoot, 'src', 'webview', 'styles.css');
+    const runtimePath = path.join(extRoot, 'dist', 'qsharpRuntime.bundle.js');
+    const runtimeUiPath = path.join(extRoot, 'src', 'webview', 'runtime', 'qsharpRuntimeUi.js');
+    const mathJsPath = path.join(extRoot, 'src', 'webview', 'math', 'math.js');
+    const webviewBundlePath = path.join(extRoot, 'dist', 'webview.bundle.js');
+    const wasmPath = path.join(extRoot, 'assets', 'wasm', 'qsc_wasm_bg.wasm');
+    const testQsPath = path.join(extRoot, 'samples', 'test.qs');
     const template = fs.readFileSync(templatePath, 'utf8');
     const uri = (filePath: string) => webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
     const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-eval' 'wasm-unsafe-eval'; connect-src ${webview.cspSource};">`;
 
     return template
         .replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n    ${csp}`)
-        .replace('webview.css', uri(cssPath))
-        .replace('script/qsharpRuntime.bundle.js', uri(runtimePath))
-        .replace('script/qsharpRuntimeUi.js', uri(runtimeUiPath))
-        .replace('script/math.js', uri(mathJsPath))
-        .replace('script/blochVector.js', uri(blochVectorPath))
-        .replace('script/qsphereVector.js', uri(qsphereVectorPath))
-        .replace('script/webview.bundle.js', uri(webviewBundlePath))
-        .replace('wasm/qsc_wasm_bg.wasm', uri(wasmPath))
-        .replace('test.qs', uri(testQsPath));
+        .replace('styles.css', uri(cssPath))
+        .replace('dist/qsharpRuntime.bundle.js', uri(runtimePath))
+        .replace('runtime/qsharpRuntimeUi.js', uri(runtimeUiPath))
+        .replace('math/math.js', uri(mathJsPath))
+        .replace('dist/webview.bundle.js', uri(webviewBundlePath))
+        .replace('assets/wasm/qsc_wasm_bg.wasm', uri(wasmPath))
+        .replace('samples/test.qs', uri(testQsPath));
 }
+
+
 
