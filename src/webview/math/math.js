@@ -212,3 +212,48 @@ function projectPoint(p, matrix, width, height) {
 
     return [screenX, screenY];
 }
+
+export {
+    Complex,
+    vec3Len,
+    vec3Normalize,
+    vec3Cross,
+    vec3Dot,
+    rodriguesRotate,
+    interpolateVector,
+    mult,
+    mat4Chain,
+    createPerspectiveMatrix,
+    createTranslationMatrix,
+    mat4RotationX,
+    mat4RotationY,
+    mat4RotationZ,
+    rotateX,
+    rotateY,
+    rotateZ,
+    rotateMatrix,
+    projectPoint
+};
+
+if (typeof window !== 'undefined') {
+    window.Complex = Complex;
+    window.vec3Len = vec3Len;
+    window.vec3Normalize = vec3Normalize;
+    window.vec3Cross = vec3Cross;
+    window.vec3Dot = vec3Dot;
+    window.rodriguesRotate = rodriguesRotate;
+    window.interpolateVector = interpolateVector;
+    window.mult = mult;
+    window.mat4Chain = mat4Chain;
+    window.createPerspectiveMatrix = createPerspectiveMatrix;
+    window.createTranslationMatrix = createTranslationMatrix;
+    window.mat4RotationX = mat4RotationX;
+    window.mat4RotationY = mat4RotationY;
+    window.mat4RotationZ = mat4RotationZ;
+    window.rotateX = rotateX;
+    window.rotateY = rotateY;
+    window.rotateZ = rotateZ;
+    window.rotateMatrix = rotateMatrix;
+    window.projectPoint = projectPoint;
+}
+

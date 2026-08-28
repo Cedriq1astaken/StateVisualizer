@@ -54,7 +54,7 @@ body {
 }
 
 #statevector-container {
-    display: flex;
+    display: none;
     flex-direction: column;
     align-items: center;
     width: min(100%, 1100px);
@@ -93,17 +93,14 @@ body {
     display: none;
 }
 
-body[data-visualization-mode="statevector"] #container,
-body[data-visualization-mode="statevector"] #canvas,
+body[data-visualization-mode="statevector"] #qsphere-view-wrapper,
 body[data-visualization-mode="statevector"] #controls {
     display: none !important;
     visibility: hidden !important;
 }
 
-body[data-visualization-mode="bloch"] #container,
-body[data-visualization-mode="bloch"] #canvas,
-body[data-visualization-mode="bloch"] #statevector-container,
-body[data-visualization-mode="bloch"] #qsphere-phase-legend {
+body[data-visualization-mode="bloch"] #qsphere-view-wrapper,
+body[data-visualization-mode="bloch"] #statevector-container {
     display: none !important;
     visibility: hidden !important;
 }
@@ -114,8 +111,25 @@ body[data-visualization-mode="qsphere"] #statevector-container {
     visibility: hidden !important;
 }
 
-#container {
+body[data-visualization-mode="statevector"] #statevector-container {
+    display: flex !important;
+}
+
+body[data-visualization-mode="qsphere"] #qsphere-view-wrapper {
+    display: flex !important;
+}
+
+#qsphere-view-wrapper {
     display: none;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    margin: 4px 0 16px;
+    position: relative;
+}
+
+#container {
     position: relative;
     width: 270px;
     height: 270px;
@@ -124,66 +138,90 @@ body[data-visualization-mode="qsphere"] #statevector-container {
 
 #container[hidden],
 #controls[hidden],
-#statevector-container[hidden] {
+#statevector-container[hidden],
+#qsphere-view-wrapper[hidden] {
     display: none !important;
 }
 
-#qsphere-phase-legend {
-    position: relative;
-    display: none;
-    align-self: center;
-    width: 270px;
-    height: 100px;
-    margin: 2px 0 16px;
+.phase-column-legend {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+    flex-shrink: 0;
 }
 
-#qsphere-phase-wheel {
-    position: absolute;
-    top: 0;
-    right: 2px;
-    width: 80px;
-    height: 80px;
+.phase-title {
+    color: #e6e6ee;
+    font: 600 11px system-ui, -apple-system, sans-serif;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
 }
 
-.phase-label,
-.phase-center {
-    position: absolute;
+.phase-column-body {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    height: 180px;
+}
+
+.phase-bar-canvas {
+    width: 10px;
+    height: 180px;
+    display: block;
+}
+
+.phase-ticks {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-start;
+    height: 100%;
+    padding: 0;
+    margin: 0;
+}
+
+.phase-horizontal-legend {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 12px;
+    user-select: none;
+}
+
+.phase-horizontal-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.phase-horizontal-bar-canvas {
+    width: 220px;
+    height: 10px;
+    display: block;
+}
+
+.phase-horizontal-ticks {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    width: 220px;
+    padding: 0;
+    margin: 0;
+}
+
+.phase-label {
     color: #e6e6ee;
     font: 600 11px system-ui, -apple-system, sans-serif;
     pointer-events: none;
     user-select: none;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
-}
-
-.phase-top {
-    top: -12px;
-    left: calc(100% - 42px);
-    transform: translateX(-50%);
-}
-
-.phase-right {
-    top: 32px;
-    left: calc(100% - 2px);
-}
-
-.phase-bottom {
-    top: 84px;
-    left: calc(100% - 42px);
-    transform: translateX(-50%);
-}
-
-.phase-left {
-    top: 32px;
-    left: calc(100% - 86px);
-    transform: translateX(-100%);
-}
-
-.phase-center {
-    top: 32px;
-    left: calc(100% - 42px);
-    color: #e6e6ee;
-    font-size: 10px;
-    transform: translateX(-50%);
+    line-height: 1;
+    white-space: nowrap;
 }
 
 #canvas {
@@ -207,6 +245,11 @@ body[data-visualization-mode="qsphere"] #statevector-container {
     will-change: transform;
 }
 
+.qs-label {
+    display: none;
+}
+
+
 #controls {
     display: flex;
     flex-direction: column;
@@ -219,9 +262,11 @@ body[data-visualization-mode="qsphere"] #statevector-container {
 
 #qubit-column {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 32px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 24px;
     width: 100%;
 }
 

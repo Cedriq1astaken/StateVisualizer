@@ -3,9 +3,11 @@ import { cp, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const packageRoot = path.dirname(fileURLToPath(import.meta.url));
-const runtimeEntry = path.join(packageRoot, 'src', 'script', 'qsharpRuntime.js');
-const runtimeBundle = path.join(packageRoot, 'src', 'script', 'qsharpRuntime.bundle.js');
+const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+const packageRoot = path.resolve(scriptsDir, '..');
+
+const runtimeEntry = path.join(packageRoot, 'src', 'webview', 'runtime', 'qsharpRuntime.js');
+const runtimeBundle = path.join(packageRoot, 'dist', 'qsharpRuntime.bundle.js');
 const wasmSource = path.join(
     packageRoot,
     'node_modules',
@@ -14,11 +16,15 @@ const wasmSource = path.join(
     'web',
     'qsc_wasm_bg.wasm'
 );
-const wasmDirectory = path.join(packageRoot, 'src', 'wasm');
+const wasmDirectory = path.join(packageRoot, 'assets', 'wasm');
 const wasmTarget = path.join(wasmDirectory, 'qsc_wasm_bg.wasm');
 
-const webviewEntry = path.join(packageRoot, 'src', 'script', 'webview.js');
-const webviewBundle = path.join(packageRoot, 'src', 'script', 'webview.bundle.js');
+const webviewEntry = path.join(packageRoot, 'src', 'webview', 'main.js');
+const webviewBundle = path.join(packageRoot, 'dist', 'webview.bundle.js');
+const distDirectory = path.join(packageRoot, 'dist');
+
+await mkdir(distDirectory, { recursive: true });
+await mkdir(wasmDirectory, { recursive: true });
 
 await build({
     entryPoints: [runtimeEntry],
@@ -46,5 +52,4 @@ await build({
     }
 });
 
-await mkdir(wasmDirectory, { recursive: true });
 await cp(wasmSource, wasmTarget);
