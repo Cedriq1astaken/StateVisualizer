@@ -15,6 +15,7 @@ import {
     projectPoint,
     extractQubitBloch
 } from '../math/index.js';
+import { createHoverTooltip } from '../render/hoverTooltip.js';
 
 function buildArrowVertices(blochVec, options) {
     const r = Math.sqrt(blochVec[0] ** 2 + blochVec[1] ** 2 + blochVec[2] ** 2);
@@ -367,17 +368,14 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
     };
 
     try {
-        const hoverInfo = document.createElement('div');
-        hoverInfo.className = 'qubit-hover-info';
-        hoverInfo.hidden = true;
-        rendererObj.stage.appendChild(hoverInfo);
+        const hoverInfo = createHoverTooltip(rendererObj.stage, 'qubit-hover-info');
         rendererObj.hoverInfo = hoverInfo;
 
         canvasElement.addEventListener('mousemove', event => {
             updateArrowHover(rendererObj, event);
         });
         canvasElement.addEventListener('mouseleave', () => {
-            rendererObj.hoverInfo.hidden = true;
+            if (rendererObj.hoverInfo) rendererObj.hoverInfo.hidden = true;
         });
     } catch (error) {
         console.warn('Arrow hover information unavailable:', error);

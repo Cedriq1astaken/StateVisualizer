@@ -5,6 +5,12 @@ import {
     formatPhasePi,
     stepStatevectorTransition
 } from '../math/index.js';
+import {
+    drawPhaseLegendToCanvas,
+    generatePhaseGradientSvgDef,
+    generatePhaseLegendSvg
+} from '../render/phaseLegend.js';
+import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
 let statevectorContainer = null;
 let statevectorCanvas = null;
@@ -22,6 +28,44 @@ let hoveredStateIndex = null;
 let isInitialized = false;
 let lastResult = null;
 
+export function computeStatevectorLayout(numStates, wrapperWidth = 800) {
+    const paddingLeft = 52;
+    const paddingRight = 20;
+    const paddingTop = 28;
+    const plotHeight = 210;
+    const paddingBottom = 42;
+    const legendHeight = 56;
+    const chartHeight = paddingTop + plotHeight + paddingBottom;
+    const totalHeight = chartHeight + legendHeight;
+
+    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
+    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
+    const minPlotWidth = numStates * (minBarWidth + barGap);
+    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
+    const plotWidth = totalWidth - paddingLeft - paddingRight;
+    const step = numStates > 0 ? plotWidth / numStates : 0;
+    const barWidth = numStates > 0 ? Math.max(14, Math.min(52, step - barGap)) : 0;
+
+    return {
+        paddingLeft,
+        paddingRight,
+        paddingTop,
+        paddingBottom,
+        plotHeight,
+        legendHeight,
+        chartHeight,
+        totalHeight,
+        minBarWidth,
+        barGap,
+        minPlotWidth,
+        totalWidth,
+        plotWidth,
+        step,
+        barWidth,
+        yTicks: [1.0, 0.75, 0.5, 0.25, 0.0]
+    };
+}
+
 function initStatevectorElements(elements = {}) {
     statevectorContainer = elements.container || document.getElementById('statevector-container');
     statevectorCanvas = elements.canvas || document.getElementById('statevector-canvas');
@@ -35,12 +79,8 @@ function initStatevectorElements(elements = {}) {
 }
 
 function getStatevectorHoverInfo() {
-    if (statevectorHoverInfo || !statevectorContainer) return statevectorHoverInfo;
-
-    statevectorHoverInfo = document.createElement('div');
-    statevectorHoverInfo.className = 'statevector-hover-info';
-    statevectorHoverInfo.hidden = true;
-    statevectorContainer.appendChild(statevectorHoverInfo);
+    if (!statevectorContainer) return null;
+    statevectorHoverInfo = getOrCreateHoverTooltip(statevectorContainer, 'statevector-hover-info', statevectorHoverInfo);
     return statevectorHoverInfo;
 }
 
@@ -148,18 +188,18 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
 
     const dpr = window.devicePixelRatio || 1;
     const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
-    const paddingLeft = 52;
-    const paddingRight = 20;
-    const paddingTop = 28;
-    const paddingBottom = 42;
-    const plotHeight = 210;
-    const totalHeight = paddingTop + plotHeight + paddingBottom;
-
-    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
-    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
-    const minPlotWidth = numStates * (minBarWidth + barGap);
-    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
-    const plotWidth = totalWidth - paddingLeft - paddingRight;
+    const layout = computeStatevectorLayout(numStates, wrapperWidth);
+    const {
+        paddingLeft,
+        paddingRight,
+        paddingTop,
+        plotHeight,
+        totalWidth,
+        totalHeight,
+        step,
+        barWidth,
+        yTicks
+    } = layout;
 
     if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(totalHeight * dpr)) {
         statevectorCanvas.width = Math.floor(totalWidth * dpr);
@@ -173,7 +213,6 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
     ctx.clearRect(0, 0, totalWidth, totalHeight);
 
     // Draw Y-Axis Grid Lines & Ticks (0.0 to 1.0)
-    const yTicks = [1.0, 0.75, 0.5, 0.25, 0.0];
     ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
@@ -184,7 +223,6 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         ctx.strokeStyle = tick === 0.0 ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.20)';
         ctx.lineWidth = tick === 0.0 ? 1.5 : 1;
         ctx.setLineDash(tick === 0.0 ? [] : [4, 4]);
-
 
         ctx.beginPath();
         ctx.moveTo(paddingLeft, y);
@@ -206,9 +244,6 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         return;
     }
 
-    // Calculate bar positions
-    const step = plotWidth / numStates;
-    const barWidth = Math.max(14, Math.min(52, step - barGap));
     statevectorBarData = [];
 
     for (let i = 0; i < numStates; i++) {
@@ -332,39 +367,30 @@ function generateStatevectorSvg() {
     const numStates = 2 ** N;
 
     const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
-    const paddingLeft = 52;
-    const paddingRight = 20;
-    const paddingTop = 28;
-    const plotHeight = 210;
-    const paddingBottom = 42;
-    const legendHeight = 56;
-    const chartHeight = paddingTop + plotHeight + paddingBottom;
-    const totalHeight = chartHeight + legendHeight;
-
-    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
-    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
-    const minPlotWidth = numStates * (minBarWidth + barGap);
-    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
-    const plotWidth = totalWidth - paddingLeft - paddingRight;
+    const layout = computeStatevectorLayout(numStates, wrapperWidth);
+    const {
+        paddingLeft,
+        paddingRight,
+        paddingTop,
+        plotHeight,
+        chartHeight,
+        totalWidth,
+        totalHeight,
+        step,
+        barWidth,
+        yTicks
+    } = layout;
 
     let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${totalHeight}" width="${totalWidth}" height="${totalHeight}">\n` +
         `  <defs>\n` +
-        `    <linearGradient id="phaseGradient" x1="0%" y1="0%" x2="100%" y2="0%">\n`;
-
-    const gradStops = [0, 0.25, 0.5, 0.75, 1.0];
-    for (const stop of gradStops) {
-        const [r, g, b] = getPhaseToRgb(stop * Math.PI * 2);
-        svg += `      <stop offset="${(stop * 100).toFixed(0)}%" stop-color="rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})"/>\n`;
-    }
-    svg += `    </linearGradient>\n` +
+        generatePhaseGradientSvgDef('phaseGradient', 'horizontal') +
         `    <style>\n` +
         `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
         `    </style>\n` +
         `  </defs>\n`;
 
     // Y-Axis grid lines & ticks
-    const yTicks = [1.0, 0.75, 0.5, 0.25, 0.0];
     for (const tick of yTicks) {
         const y = paddingTop + (1.0 - tick) * plotHeight;
         const isBase = tick === 0.0;
@@ -382,9 +408,6 @@ function generateStatevectorSvg() {
     }
 
     // Bars
-    const step = plotWidth / numStates;
-    const barWidth = Math.max(14, Math.min(52, step - barGap));
-
     for (let i = 0; i < numStates; i++) {
         const amp = amplitudes[i] || { re: 0, im: 0 };
         const magnitude = Math.sqrt(amp.re * amp.re + amp.im * amp.im);
@@ -423,20 +446,16 @@ function generateStatevectorSvg() {
     const legendX = (totalWidth - legendWidth) / 2;
     const legendY = chartHeight + 18;
 
-    svg += `  <text x="${totalWidth / 2}" y="${chartHeight + 8}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">Phase</text>\n`;
-    svg += `  <rect x="${legendX}" y="${legendY}" width="${legendWidth}" height="${legendBarHeight}" rx="2" fill="url(#phaseGradient)"/>\n`;
-
-    const legendTicks = [
-        { label: '0', x: legendX },
-        { label: 'π/2', x: legendX + legendWidth * 0.25 },
-        { label: 'π', x: legendX + legendWidth * 0.5 },
-        { label: '3π/2', x: legendX + legendWidth * 0.75 },
-        { label: '2π', x: legendX + legendWidth }
-    ];
-
-    for (const tick of legendTicks) {
-        svg += `  <text x="${tick.x}" y="${legendY + legendBarHeight + 14}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">${tick.label}</text>\n`;
-    }
+    svg += generatePhaseLegendSvg({
+        x: legendX,
+        y: legendY,
+        width: legendWidth,
+        height: legendBarHeight,
+        orientation: 'horizontal',
+        gradientId: 'phaseGradient',
+        titleX: totalWidth / 2,
+        titleY: chartHeight + 8
+    });
 
     svg += `</svg>`;
     return svg;
@@ -459,9 +478,6 @@ function generateStatevectorPng() {
     const ctx = offscreen.getContext('2d');
     if (!ctx) return statevectorCanvas.toDataURL('image/png');
 
-    // Fill dark background
-    // (Transparent background preserved)
-
     // Draw main chart canvas
     ctx.drawImage(statevectorCanvas, 0, 0);
 
@@ -476,34 +492,17 @@ function generateStatevectorPng() {
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#e6e6ee';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText('Phase', cssTotalW / 2, legendY - 5);
-
-    // Draw gradient bar
-    for (let x = 0; x < legendW; x++) {
-        const t = legendW > 1 ? x / (legendW - 1) : 0;
-        const phase = t * Math.PI * 2;
-        const [r, g, b] = getPhaseToRgb(phase);
-        ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-        ctx.fillRect(legendX + x, legendY, 1, legendBarH);
-    }
-
-    // Ticks
-    const ticks = [
-        { label: '0', x: legendX },
-        { label: 'π/2', x: legendX + legendW * 0.25 },
-        { label: 'π', x: legendX + legendW * 0.5 },
-        { label: '3π/2', x: legendX + legendW * 0.75 },
-        { label: '2π', x: legendX + legendW }
-    ];
-
-    ctx.textBaseline = 'top';
-    for (const tick of ticks) {
-        ctx.fillText(tick.label, tick.x, legendY + legendBarH + 5);
-    }
+    drawPhaseLegendToCanvas(ctx, {
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendBarH,
+        orientation: 'horizontal',
+        showTitle: true,
+        showTicks: true,
+        titleX: cssTotalW / 2,
+        titleY: legendY - 5
+    });
 
     ctx.restore();
     return offscreen.toDataURL('image/png');

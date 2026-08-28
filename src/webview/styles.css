@@ -76,7 +76,9 @@ body {
     background-color: transparent;
 }
 
-.statevector-hover-info {
+.statevector-hover-info,
+.qsphere-hover-info,
+.qubit-hover-info {
     position: absolute;
     z-index: 10;
     padding: 6px 8px;
@@ -89,7 +91,9 @@ body {
     white-space: nowrap;
 }
 
-.statevector-hover-info[hidden] {
+.statevector-hover-info[hidden],
+.qsphere-hover-info[hidden],
+.qubit-hover-info[hidden] {
     display: none;
 }
 

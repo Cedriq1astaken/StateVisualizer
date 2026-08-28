@@ -17,102 +17,22 @@ import {
     getCurrentQubits,
     stepActiveStatevectorTransition
 } from './statevector.js';
+import {
+    drawPhaseLegendToCanvas,
+    generatePhaseGradientSvgDef,
+    generatePhaseLegendSvg
+} from '../render/phaseLegend.js';
+import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
-function computeQsphereWithState(state, N, options) {
-    const focusedIndex = options?.focusedIndex;
-    const ringVertices = buildHammingRings(N);
-    const spokeVertices = buildQSphereSpokes(state, N, focusedIndex);
+let qsphereHoverInfo = null;
+
+function computeQsphereWithState(state, N) {
     return {
-        nodeVertices: buildQNodes(state, N, focusedIndex),
-        ringVertices,
-        spokeVertices,
-        lineVertices: ringVertices,
         points: computeQspherePoints(N),
         hoverTargets: buildQSphereHoverTargets(state, N),
         state,
         N
     };
-}
-
-function getFocusedAlpha(pointIndex, focusedIndex) {
-    if (focusedIndex === null || focusedIndex === undefined || pointIndex === focusedIndex) {
-        return 1.0;
-    }
-    return 0.24;
-}
-
-function buildQNodes(state, N, focusedIndex) {
-    const verts = [];
-    const points = computeQspherePoints(N);
-    for (const point of points) {
-        const amp = state[point.index] || { re: 0, im: 0 };
-        const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
-        const radius = 0.12 * Math.sqrt(probability);
-        const phase = Math.atan2(amp.im, amp.re);
-        const [r, g, b] = getPhaseToRgb(phase);
-        const alpha = getFocusedAlpha(point.index, focusedIndex);
-        verts.push(...buildNodeSphere(point.x, point.y, point.z, radius, r, g, b, alpha, 8));
-    }
-    return new Float32Array(verts);
-}
-
-function buildNodeSphere(cx, cy, cz, radius, r, g, b, a, segments) {
-    const verts = [];
-    for (let ri = 0; ri < segments; ri++) {
-        const t0 = (ri / segments) * Math.PI;
-        const t1 = ((ri + 1) / segments) * Math.PI;
-        for (let si = 0; si < segments; si++) {
-            const p0 = (si / segments) * 2 * Math.PI;
-            const p1 = ((si + 1) / segments) * 2 * Math.PI;
-            const v = [
-                [Math.sin(t0) * Math.cos(p0), Math.cos(t0), Math.sin(t0) * Math.sin(p0)],
-                [Math.sin(t0) * Math.cos(p1), Math.cos(t0), Math.sin(t0) * Math.sin(p1)],
-                [Math.sin(t1) * Math.cos(p0), Math.cos(t1), Math.sin(t1) * Math.sin(p0)],
-                [Math.sin(t1) * Math.cos(p1), Math.cos(t1), Math.sin(t1) * Math.sin(p1)]
-            ];
-            for (const tri of [[0, 1, 2], [1, 3, 2]]) {
-                for (const vi of tri) {
-                    const [nx, ny, nz] = v[vi];
-                    verts.push(cx + radius * nx, cy + radius * ny, cz + radius * nz, r, g, b, a);
-                }
-            }
-        }
-    }
-    return verts;
-}
-
-function buildHammingRings(N) {
-    const segments = 64;
-    const verts = [];
-    for (let w = 1; w < N; w++) {
-        const theta = (Math.PI * w) / N;
-        const ringY = Math.cos(theta);
-        const ringR = Math.sin(theta);
-        for (let i = 0; i < segments; i++) {
-            const a0 = (i / segments) * 2 * Math.PI;
-            const a1 = ((i + 1) / segments) * 2 * Math.PI;
-            verts.push(ringR * Math.cos(a0), ringY, ringR * Math.sin(a0));
-            verts.push(ringR * Math.cos(a1), ringY, ringR * Math.sin(a1));
-        }
-    }
-    return new Float32Array(verts);
-}
-
-function buildQSphereSpokes(state, N, focusedIndex) {
-    const points = computeQspherePoints(N);
-    const verts = [];
-    for (const point of points) {
-        const amp = state[point.index] || { re: 0, im: 0 };
-        const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
-        const phase = Math.atan2(amp.im, amp.re);
-        const [r, g, b] = getPhaseToRgb(phase);
-        const alpha = getFocusedAlpha(point.index, focusedIndex);
-        verts.push(0, 0, 0, r, g, b, alpha);
-        verts.push(point.x, point.y, point.z, r, g, b, alpha);
-    }
-    return new Float32Array(verts);
 }
 
 function buildQSphereHoverTargets(state, N) {
@@ -194,16 +114,11 @@ function createHammingRings(N, lineMat) {
 let threeState = null;
 let lastResult = null;
 let _qsLabelData = [];
-let qsphereHoverInfo = null;
 
 function getQsphereHoverInfo() {
-    if (qsphereHoverInfo) return qsphereHoverInfo;
     const container = document.getElementById('container');
     if (!container) return null;
-    qsphereHoverInfo = document.createElement('div');
-    qsphereHoverInfo.className = 'qubit-hover-info';
-    qsphereHoverInfo.hidden = true;
-    container.appendChild(qsphereHoverInfo);
+    qsphereHoverInfo = getOrCreateHoverTooltip(container, 'qsphere-hover-info', qsphereHoverInfo);
     return qsphereHoverInfo;
 }
 
@@ -246,9 +161,7 @@ function updateQsphereLabels(modelMatrix, w, h) {
 function updateQsphereSceneWithAmplitudes(state, N, options = {}) {
     if (!threeState) return;
 
-    const qs = computeQsphereWithState(state, N, {
-        focusedIndex: threeState._qsphereHoveredIndex
-    });
+    const qs = computeQsphereWithState(state, N);
 
     const group = threeState.qsphereGroup;
     while (group.children.length > 0) {
@@ -368,14 +281,7 @@ function generateQsphereSvg() {
     let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}">\n` +
         `  <defs>\n` +
-        `    <linearGradient id="qspherePhaseGrad" x1="0%" y1="100%" x2="0%" y2="0%">\n`;
-
-    const stops = [0, 0.25, 0.5, 0.75, 1.0];
-    for (const s of stops) {
-        const [r, g, b] = getPhaseToRgb(s * Math.PI * 2);
-        svg += `      <stop offset="${(s * 100).toFixed(0)}%" stop-color="rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})"/>\n`;
-    }
-    svg += `    </linearGradient>\n` +
+        generatePhaseGradientSvgDef('qspherePhaseGrad', 'vertical') +
         `    <style>\n` +
         `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
         `    </style>\n` +
@@ -440,20 +346,16 @@ function generateQsphereSvg() {
     const legendW = 10;
     const legendH = 180;
 
-    svg += `  <text x="${legendX + 16}" y="${legendY - 14}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="middle">Phase</text>\n`;
-    svg += `  <rect x="${legendX}" y="${legendY}" width="${legendW}" height="${legendH}" rx="2" fill="url(#qspherePhaseGrad)"/>\n`;
-
-    const legendTicks = [
-        { label: '2π', y: legendY + 4 },
-        { label: '3π/2', y: legendY + legendH * 0.25 + 4 },
-        { label: 'π', y: legendY + legendH * 0.5 + 4 },
-        { label: 'π/2', y: legendY + legendH * 0.75 + 4 },
-        { label: '0', y: legendY + legendH + 4 }
-    ];
-
-    for (const tick of legendTicks) {
-        svg += `  <text x="${legendX + legendW + 8}" y="${tick.y}" fill="#e6e6ee" font-size="11" font-weight="600" text-anchor="start">${tick.label}</text>\n`;
-    }
+    svg += generatePhaseLegendSvg({
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendH,
+        orientation: 'vertical',
+        gradientId: 'qspherePhaseGrad',
+        titleX: legendX + 16,
+        titleY: legendY - 14
+    });
 
     svg += `</svg>`;
     return svg;
@@ -478,9 +380,6 @@ function generateQspherePng() {
     offscreen.height = totalH;
     const ctx = offscreen.getContext('2d');
     if (!ctx) return canvas.toDataURL('image/png');
-
-    // Dark background
-    // (Transparent background preserved)
 
     // Draw WebGL canvas
     ctx.drawImage(canvas, 0, 0);
@@ -513,32 +412,17 @@ function generateQspherePng() {
     const legendW = 10;
     const legendH = 180;
 
-    ctx.font = '600 11px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = '#e6e6ee';
-    ctx.textAlign = 'center';
-    ctx.fillText('Phase', legendX + 16, legendY - 12);
-
-    for (let y = 0; y < legendH; y++) {
-        const t = legendH > 1 ? 1 - (y / (legendH - 1)) : 0;
-        const phase = t * Math.PI * 2;
-        const [r, g, b] = getPhaseToRgb(phase);
-        ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-        ctx.fillRect(legendX, legendY + y, legendW, 1);
-    }
-
-    const ticks = [
-        { label: '2π', y: legendY + 4 },
-        { label: '3π/2', y: legendY + legendH * 0.25 + 4 },
-        { label: 'π', y: legendY + legendH * 0.5 + 4 },
-        { label: 'π/2', y: legendY + legendH * 0.75 + 4 },
-        { label: '0', y: legendY + legendH + 4 }
-    ];
-
-    ctx.textAlign = 'start';
-    ctx.fillStyle = '#e6e6ee';
-    for (const tick of ticks) {
-        ctx.fillText(tick.label, legendX + legendW + 6, tick.y);
-    }
+    drawPhaseLegendToCanvas(ctx, {
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendH,
+        orientation: 'vertical',
+        showTitle: true,
+        showTicks: true,
+        titleX: legendX + 16,
+        titleY: legendY - 12
+    });
 
     ctx.restore();
     return offscreen.toDataURL('image/png');
@@ -647,9 +531,6 @@ export {
     hammingWeight,
     computeQspherePoints,
     computeQsphereWithState,
-    buildQNodes,
-    buildHammingRings,
-    buildQSphereSpokes,
     buildQSphereHoverTargets,
     createQnodeMesh,
     createSpokeMesh,
@@ -669,18 +550,12 @@ if (typeof window !== 'undefined') {
         qsphereVisualization,
         computeQspherePoints,
         computeQsphereWithState,
-        buildQNodes,
-        buildHammingRings,
-        buildQSphereSpokes,
         buildQSphereHoverTargets,
         updateQsphereSceneWithAmplitudes,
         generateQsphereSvg,
         generateQspherePng
     };
     window.computeQspherePoints = computeQspherePoints;
-    window.buildQNodes = buildQNodes;
-    window.buildHammingRings = buildHammingRings;
-    window.buildQSphereSpokes = buildQSphereSpokes;
     window.buildQSphereHoverTargets = buildQSphereHoverTargets;
 }
 

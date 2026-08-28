@@ -16,6 +16,7 @@ import {
     createTranslationMatrix,
     rotateMatrix
 } from './math/index.js';
+import { drawPhaseLegendToCanvas } from './render/phaseLegend.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
@@ -40,36 +41,24 @@ function drawPhaseLegend() {
     verticalCanvases.forEach(c => {
         const context = c.getContext('2d');
         if (!context) return;
-
-        const width = c.width;
-        const height = c.height;
-        context.clearRect(0, 0, width, height);
-
-        for (let y = 0; y < height; y++) {
-            const t = height > 1 ? 1 - (y / (height - 1)) : 0;
-            const phase = t * Math.PI * 2;
-            const [r, g, b] = getPhaseToRgb(phase);
-            context.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-            context.fillRect(0, y, width, 1);
-        }
+        context.clearRect(0, 0, c.width, c.height);
+        drawPhaseLegendToCanvas(context, {
+            width: c.width,
+            height: c.height,
+            orientation: 'vertical'
+        });
     });
 
     const horizontalCanvases = document.querySelectorAll('.phase-horizontal-bar-canvas');
     horizontalCanvases.forEach(c => {
         const context = c.getContext('2d');
         if (!context) return;
-
-        const width = c.width;
-        const height = c.height;
-        context.clearRect(0, 0, width, height);
-
-        for (let x = 0; x < width; x++) {
-            const t = width > 1 ? (x / (width - 1)) : 0;
-            const phase = t * Math.PI * 2;
-            const [r, g, b] = getPhaseToRgb(phase);
-            context.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-            context.fillRect(x, 0, 1, height);
-        }
+        context.clearRect(0, 0, c.width, c.height);
+        drawPhaseLegendToCanvas(context, {
+            width: c.width,
+            height: c.height,
+            orientation: 'horizontal'
+        });
     });
 }
 
