@@ -1,6 +1,6 @@
 import { getPhaseToRgb } from '../math/index.js';
 
-const HORIZONTAL_TICKS = [
+export const HORIZONTAL_TICKS = [
     { label: '0', fraction: 0 },
     { label: 'π/2', fraction: 0.25 },
     { label: 'π', fraction: 0.5 },
@@ -8,7 +8,7 @@ const HORIZONTAL_TICKS = [
     { label: '2π', fraction: 1.0 }
 ];
 
-const VERTICAL_TICKS = [
+export const VERTICAL_TICKS = [
     { label: '2π', fraction: 0 },
     { label: '3π/2', fraction: 0.25 },
     { label: 'π', fraction: 0.5 },
@@ -109,6 +109,7 @@ export function drawPhaseLegendToCanvas(ctx, options = {}) {
  * @param {'vertical'|'horizontal'} [orientation='horizontal']
  * @returns {string}
  */
+/*
 export function generatePhaseGradientSvgDef(gradientId, orientation = 'horizontal') {
     const stops = [0, 0.25, 0.5, 0.75, 1.0];
     const isHoriz = orientation === 'horizontal';
@@ -124,23 +125,6 @@ export function generatePhaseGradientSvgDef(gradientId, orientation = 'horizonta
     return svg;
 }
 
-/**
- * Generates vector SVG markup for the phase legend (title, gradient rectangle, and tick labels).
- *
- * @param {Object} options
- * @param {number} options.x
- * @param {number} options.y
- * @param {number} options.width
- * @param {number} options.height
- * @param {'vertical'|'horizontal'} [options.orientation='horizontal']
- * @param {string} options.gradientId
- * @param {string} [options.title='Phase']
- * @param {string} [options.textColor='#e6e6ee']
- * @param {number} [options.titleX]
- * @param {number} [options.titleY]
- * @param {number} [options.rx=2]
- * @returns {string}
- */
 export function generatePhaseLegendSvg(options = {}) {
     const {
         x,
@@ -182,3 +166,4 @@ export function generatePhaseLegendSvg(options = {}) {
 
     return svg;
 }
+*/

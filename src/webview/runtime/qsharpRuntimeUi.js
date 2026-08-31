@@ -6,12 +6,6 @@
     let lastSuccessfulResult = null;
     let requestGeneration = 0;
 
-    function showResult(result) {
-        const status = document.querySelector('#status');
-        if (status) status.textContent = '';
-        return result;
-    }
-
     window.parseQSharp = async function (source, targetOp, targetLine) {
         const requestId = ++requestGeneration;
         try {
@@ -20,12 +14,10 @@
                 return lastSuccessfulResult || result;
             }
             if (result?.error) {
-                showResult(result);
-
                 return lastSuccessfulResult || result;
             }
             lastSuccessfulResult = result;
-            return showResult(result);
+            return result;
         } catch (error) {
             const failure = {
                 qubitsDeclared: 0,
@@ -37,7 +29,6 @@
             if (requestId !== requestGeneration) {
                 return lastSuccessfulResult || failure;
             }
-            showResult(failure);
             return lastSuccessfulResult || failure;
         }
     };

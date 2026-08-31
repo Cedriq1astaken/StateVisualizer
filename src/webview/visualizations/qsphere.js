@@ -18,9 +18,9 @@ import {
     stepActiveStatevectorTransition
 } from './statevector.js';
 import {
-    drawPhaseLegendToCanvas,
-    generatePhaseGradientSvgDef,
-    generatePhaseLegendSvg
+    drawPhaseLegendToCanvas
+    // generatePhaseGradientSvgDef,
+    // generatePhaseLegendSvg
 } from '../render/phaseLegend.js';
 import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
@@ -262,6 +262,7 @@ function updateQsphereHover(event, canvas, rotationAngles) {
     hoverInfo.hidden = false;
 }
 
+/*
 function generateQsphereSvg() {
     const qsphereData = threeState?._qsphereData;
     const N = qsphereData?.N || (lastResult ? getQsphereState(lastResult).N : 0);
@@ -274,8 +275,9 @@ function generateQsphereSvg() {
     const sphereOffsetX = 10;
     const sphereOffsetY = 20;
 
+    const rotation = (typeof window !== 'undefined' && window.rotationAngles) ? window.rotationAngles : [0.3, 0.0, 0.0];
     const modelMatrix = threeState?._projMatrix
-        ? rotateMatrix(...(window.rotationAngles || [0.3, 0.0, 0.0]), threeState._projMatrix)
+        ? rotateMatrix(...rotation, threeState._projMatrix)
         : rotateMatrix(0.3, 0.0, 0.0, threeState?._buildProjMatrix ? threeState._buildProjMatrix() : new Float32Array(16));
 
     let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -360,15 +362,17 @@ function generateQsphereSvg() {
     svg += `</svg>`;
     return svg;
 }
+*/
 
 function generateQspherePng() {
+    if (typeof document === 'undefined') return '';
     const canvas = document.querySelector('#canvas');
     if (!canvas || !threeState) return '';
 
     // Render current Three.js scene
     threeState.renderer.render(threeState.scene, threeState.camera);
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const sphereW = canvas.width;
     const sphereH = canvas.height;
     const legendExtraW = Math.floor(75 * dpr);
@@ -384,7 +388,7 @@ function generateQspherePng() {
     // Draw WebGL canvas
     ctx.drawImage(canvas, 0, 0);
 
-    // Draw 3D projected HTML labels
+    // Draw 3D projected HTML labels using live rotation
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
@@ -396,7 +400,8 @@ function generateQspherePng() {
 
     const cssSphereW = sphereW / dpr;
     const cssSphereH = sphereH / dpr;
-    const modelMatrix = rotateMatrix(...(window.rotationAngles || [0.3, 0.0, 0.0]), threeState._projMatrix);
+    const rotation = (typeof window !== 'undefined' && window.rotationAngles) ? window.rotationAngles : [0.3, 0.0, 0.0];
+    const modelMatrix = rotateMatrix(...rotation, threeState._projMatrix);
 
     for (const item of _qsLabelData) {
         const pt = projectPoint(item.pos, modelMatrix, cssSphereW, cssSphereH);
@@ -514,12 +519,12 @@ const qsphereVisualization = {
     },
 
     async export() {
-        const svgContent = generateQsphereSvg();
+        // const svgContent = generateQsphereSvg();
         const pngDataUrl = generateQspherePng();
         return {
             filenamePrefix: 'qsphere',
-            pngDataUrl,
-            svgContent
+            pngDataUrl
+            // svgContent
         };
     }
 };
@@ -541,21 +546,6 @@ export {
     updateQsphereHover,
     clearQsphereHover,
     setQsphereHoveredIndex,
-    generateQsphereSvg,
+    // generateQsphereSvg,
     generateQspherePng
 };
-
-if (typeof window !== 'undefined') {
-    window.qsphere = {
-        qsphereVisualization,
-        computeQspherePoints,
-        computeQsphereWithState,
-        buildQSphereHoverTargets,
-        updateQsphereSceneWithAmplitudes,
-        generateQsphereSvg,
-        generateQspherePng
-    };
-    window.computeQspherePoints = computeQspherePoints;
-    window.buildQSphereHoverTargets = buildQSphereHoverTargets;
-}
-

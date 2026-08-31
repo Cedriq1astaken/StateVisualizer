@@ -276,29 +276,3 @@ export {
     rotateMatrix,
     projectPoint
 };
-
-if (typeof window !== 'undefined') {
-    window.Complex = Complex;
-    window.complexAbs2 = complexAbs2;
-    window.vec3Len = vec3Len;
-    window.vec3Normalize = vec3Normalize;
-    window.vec3Cross = vec3Cross;
-    window.vec3Dot = vec3Dot;
-    window.vectorsClose = vectorsClose;
-    window.rodriguesRotate = rodriguesRotate;
-    window.alignmentRotation = alignmentRotation;
-    window.interpolateVector = interpolateVector;
-    window.distanceToSegment = distanceToSegment;
-    window.mult = mult;
-    window.mat4Chain = mat4Chain;
-    window.createPerspectiveMatrix = createPerspectiveMatrix;
-    window.createTranslationMatrix = createTranslationMatrix;
-    window.mat4RotationX = mat4RotationX;
-    window.mat4RotationY = mat4RotationY;
-    window.mat4RotationZ = mat4RotationZ;
-    window.rotateX = rotateX;
-    window.rotateY = rotateY;
-    window.rotateZ = rotateZ;
-    window.rotateMatrix = rotateMatrix;
-    window.projectPoint = projectPoint;
-}

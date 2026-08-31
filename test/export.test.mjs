@@ -1,30 +1,45 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 
-import { generateStatevectorSvg, computeStatevectorLayout } from '../src/webview/visualizations/statevector.js';
-import { generateBlochSvg } from '../src/webview/visualizations/bloch.js';
-import { generateQsphereSvg, computeQsphereWithState } from '../src/webview/visualizations/qsphere.js';
+/*
+import { generateStatevectorSvg } from '../src/webview/visualizations/statevector.js';
+import {
+    generateBlochSvg,
+    generateSingleBlochSvg
+} from '../src/webview/visualizations/bloch.js';
+import { generateQsphereSvg } from '../src/webview/visualizations/qsphere.js';
 import {
     generatePhaseGradientSvgDef,
     generatePhaseLegendSvg
 } from '../src/webview/render/phaseLegend.js';
+*/
+import { computeStatevectorLayout, statevectorVisualization } from '../src/webview/visualizations/statevector.js';
+import {
+    computeBlochCardLayout,
+    getBlochModelMatrix,
+    getProjectedBlochLabels,
+    getBlochWireframePoints,
+    getBlochAxes,
+    blochVisualization
+} from '../src/webview/visualizations/bloch.js';
+import { computeQsphereWithState, qsphereVisualization } from '../src/webview/visualizations/qsphere.js';
+import { createPerspectiveMatrix, createTranslationMatrix, mult } from '../src/webview/math/index.js';
 
-describe('Visualization SVG Export Generators', () => {
-    test('Statevector SVG generator produces valid SVG markup', () => {
-        const svg = generateStatevectorSvg();
-        assert.ok(svg.startsWith('<?xml version="1.0" encoding="UTF-8"?>'), 'SVG has XML declaration');
-        assert.ok(svg.includes('<svg xmlns="http://www.w3.org/2000/svg"'), 'SVG contains root element');
-        assert.ok(svg.includes('linearGradient id="phaseGradient"'), 'SVG includes phase gradient');
-        assert.ok(svg.includes('</svg>'), 'SVG properly closed');
+describe('Visualization PNG Export Structure (SVG deactivated)', () => {
+    test('Statevector export returns PNG without SVG', async () => {
+        const result = await statevectorVisualization.export();
+        assert.strictEqual(result.filenamePrefix, 'statevector');
+        assert.strictEqual(result.svgContent, undefined, 'SVG is deactivated');
     });
 
-    test('Bloch Sphere SVG generator handles states', () => {
-        const svg = generateBlochSvg();
-        assert.ok(svg.includes('<svg'), 'Bloch SVG root present');
-        assert.ok(svg.includes('</svg>'), 'Bloch SVG properly closed');
+    test('Bloch Sphere export returns separate PNG frames without SVG', async () => {
+        const exportResult = await blochVisualization.export();
+        assert.strictEqual(exportResult.filenamePrefix, 'bloch');
+        assert.ok(Array.isArray(exportResult.files), 'Bloch export returns files array');
+        assert.strictEqual(exportResult.svgContent, undefined, 'SVG is deactivated');
     });
 
-    test('Q-sphere SVG generator produces valid spherical coordinates and legend', () => {
+    test('Q-sphere export returns PNG without SVG', async () => {
         const bellAmps = [
             { re: Math.SQRT1_2, im: 0 },
             { re: 0, im: 0 },
@@ -35,14 +50,14 @@ describe('Visualization SVG Export Generators', () => {
         assert.strictEqual(qsphereData.points.length, 4, '2-qubit Q-sphere has 4 points');
         assert.strictEqual(qsphereData.hoverTargets.length, 4, '4 hover targets generated');
 
-        const svg = generateQsphereSvg();
-        assert.ok(svg.includes('<svg xmlns="http://www.w3.org/2000/svg"'), 'Q-sphere SVG root present');
-        assert.ok(svg.includes('id="qspherePhaseGrad"'), 'Q-sphere SVG contains phase gradient');
-        assert.ok(svg.includes('</svg>'), 'Q-sphere SVG properly closed');
+        const exportResult = await qsphereVisualization.export();
+        assert.strictEqual(exportResult.filenamePrefix, 'qsphere');
+        assert.strictEqual(exportResult.svgContent, undefined, 'SVG is deactivated');
     });
 });
 
-describe('Phase Legend and Statevector Layout Helpers', () => {
+describe('Phase Legend, Statevector, and Bloch Layout Helpers', () => {
+    /*
     test('Phase gradient SVG definition generator handles horizontal & vertical orientations', () => {
         const horizGrad = generatePhaseGradientSvgDef('gradH', 'horizontal');
         assert.ok(horizGrad.includes('id="gradH"'));
@@ -85,6 +100,7 @@ describe('Phase Legend and Statevector Layout Helpers', () => {
         assert.ok(vLegend.includes('>2π<'));
         assert.ok(vLegend.includes('>0<'));
     });
+    */
 
     test('computeStatevectorLayout calculates responsive geometry correctly', () => {
         const layout8 = computeStatevectorLayout(8, 800);
@@ -99,6 +115,39 @@ describe('Phase Legend and Statevector Layout Helpers', () => {
         assert.strictEqual(layout64.minBarWidth, 20);
         assert.strictEqual(layout64.barGap, 8);
         assert.ok(layout64.totalWidth > 800, 'Expands totalWidth when needed for min bar width');
+    });
+
+    test('computeBlochCardLayout calculates grid dimensions', () => {
+        const layout1 = computeBlochCardLayout(1);
+        assert.strictEqual(layout1.cols, 1);
+        assert.strictEqual(layout1.rows, 1);
+        assert.strictEqual(layout1.cardW, 270);
+        assert.strictEqual(layout1.cardH, 320);
+
+        const layout4 = computeBlochCardLayout(4);
+        assert.strictEqual(layout4.cols, 2);
+        assert.strictEqual(layout4.rows, 2);
+    });
+
+    test('Bloch projection helpers project labels, wireframes, and axes', () => {
+        const proj = mult(
+            createPerspectiveMatrix(Math.PI / 4, 1.0, 0.1, 100),
+            createTranslationMatrix(0, 0, -3)
+        );
+        const modelMatrix = getBlochModelMatrix([0.3, 0.0, 0.0], proj);
+
+        const labels = getProjectedBlochLabels(modelMatrix, 270, 270);
+        assert.strictEqual(labels.length, 6);
+        assert.strictEqual(labels[0].text, '|0⟩');
+        assert.ok(labels[0].point !== null);
+
+        const wireframes = getBlochWireframePoints(modelMatrix, 270, 270);
+        assert.strictEqual(wireframes.length, 3, '3 orthogonal wireframe circle planes');
+        assert.ok(wireframes[0].length > 10);
+
+        const axes = getBlochAxes(modelMatrix, 270, 270);
+        assert.strictEqual(axes.length, 3, '3 coordinate axes');
+        assert.ok(axes[0].p1 !== null && axes[0].p2 !== null);
     });
 });
 

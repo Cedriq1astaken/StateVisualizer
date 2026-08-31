@@ -26,26 +26,25 @@ const distDirectory = path.join(packageRoot, 'dist');
 await mkdir(distDirectory, { recursive: true });
 await mkdir(wasmDirectory, { recursive: true });
 
-await build({
-    entryPoints: [runtimeEntry],
+const sharedBuildOptions = {
     bundle: true,
     format: 'iife',
     platform: 'browser',
     target: 'es2020',
-    outfile: runtimeBundle,
     legalComments: 'none',
     sourcemap: false
+};
+
+await build({
+    ...sharedBuildOptions,
+    entryPoints: [runtimeEntry],
+    outfile: runtimeBundle
 });
 
 await build({
+    ...sharedBuildOptions,
     entryPoints: [webviewEntry],
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2020',
     outfile: webviewBundle,
-    legalComments: 'none',
-    sourcemap: false,
     external: [],
     define: {
         'process.env.NODE_ENV': '"production"'

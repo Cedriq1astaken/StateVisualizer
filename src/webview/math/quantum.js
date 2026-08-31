@@ -179,16 +179,3 @@ export {
     formatPhasePi,
     stepStatevectorTransition
 };
-
-if (typeof window !== 'undefined') {
-    window.parseAmplitude = parseAmplitude;
-    window.isTrivialState = isTrivialState;
-    window.getQsphereState = getQsphereState;
-    window.extractQubitBloch = extractQubitBloch;
-    window.hammingWeight = hammingWeight;
-    window.computeQspherePoints = computeQspherePoints;
-    window.getPhaseToRgb = getPhaseToRgb;
-    window.formatBasisState = formatBasisState;
-    window.formatPhasePi = formatPhasePi;
-    window.stepStatevectorTransition = stepStatevectorTransition;
-}

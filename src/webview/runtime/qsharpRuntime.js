@@ -144,7 +144,6 @@ function parseQSharp(source, targetOp, targetLine) {
 }
 
 if (typeof window !== 'undefined') {
-    window.qsphereQSharpRuntime = { executeQSharp };
     window.parseQSharp = parseQSharp;
 }
 

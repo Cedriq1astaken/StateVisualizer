@@ -71,8 +71,11 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (message.command === 'exportFiles') {
                 try {
-                    const { name, pngDataUrl, svgContent } = message.data || {};
-                    const vizName = name || 'visualization';
+                    const payload = message.data || {};
+                    const items: Array<{ name?: string; pngDataUrl?: string; svgContent?: string }> =
+                        Array.isArray(payload.files) && payload.files.length > 0
+                            ? payload.files
+                            : [{ name: payload.name, pngDataUrl: payload.pngDataUrl, svgContent: payload.svgContent }];
 
                     // Generate timestamp formatted as YYYY-MM-DD_HH-mm-ss
                     const now = new Date();
@@ -90,23 +93,34 @@ export function activate(context: vscode.ExtensionContext) {
                         targetDir = process.cwd();
                     }
 
-                    const pngFileName = `${vizName}_${timestamp}.png`;
-                    const svgFileName = `${vizName}_${timestamp}.svg`;
-                    const pngFilePath = path.join(targetDir, pngFileName);
-                    const svgFilePath = path.join(targetDir, svgFileName);
+                    const exportedNames: string[] = [];
 
-                    if (pngDataUrl) {
-                        const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '');
-                        await fs.promises.writeFile(pngFilePath, Buffer.from(base64Data, 'base64'));
+                    for (const item of items) {
+                        const vizName = item.name || 'visualization';
+                        const pngFileName = `${vizName}_${timestamp}.png`;
+                        const pngFilePath = path.join(targetDir, pngFileName);
+
+                        // SVG export disabled for now
+                        // const svgFileName = `${vizName}_${timestamp}.svg`;
+                        // const svgFilePath = path.join(targetDir, svgFileName);
+
+                        if (item.pngDataUrl) {
+                            const base64Data = item.pngDataUrl.replace(/^data:image\/png;base64,/, '');
+                            await fs.promises.writeFile(pngFilePath, Buffer.from(base64Data, 'base64'));
+                            exportedNames.push(pngFileName);
+                        }
+
+                        // if (item.svgContent) {
+                        //     await fs.promises.writeFile(svgFilePath, item.svgContent, 'utf8');
+                        //     exportedNames.push(svgFileName);
+                        // }
                     }
 
-                    if (svgContent) {
-                        await fs.promises.writeFile(svgFilePath, svgContent, 'utf8');
+                    if (exportedNames.length > 0) {
+                        vscode.window.showInformationMessage(
+                            `StateVisualizer: Exported ${exportedNames.join(', ')}`
+                        );
                     }
-
-                    vscode.window.showInformationMessage(
-                        `StateVisualizer: Exported ${pngFileName} and ${svgFileName}`
-                    );
                 } catch (err) {
                     console.error('Error exporting visualization files:', err);
                     vscode.window.showErrorMessage(`StateVisualizer export failed: ${String(err)}`);

@@ -6,9 +6,9 @@ import {
     stepStatevectorTransition
 } from '../math/index.js';
 import {
-    drawPhaseLegendToCanvas,
-    generatePhaseGradientSvgDef,
-    generatePhaseLegendSvg
+    drawPhaseLegendToCanvas
+    // generatePhaseGradientSvgDef,
+    // generatePhaseLegendSvg
 } from '../render/phaseLegend.js';
 import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
@@ -67,6 +67,7 @@ export function computeStatevectorLayout(numStates, wrapperWidth = 800) {
 }
 
 function initStatevectorElements(elements = {}) {
+    if (typeof document === 'undefined') return;
     statevectorContainer = elements.container || document.getElementById('statevector-container');
     statevectorCanvas = elements.canvas || document.getElementById('statevector-canvas');
     statevectorStats = elements.stats || document.getElementById('statevector-stats');
@@ -113,9 +114,6 @@ function setupStatevectorEvents() {
         const hoverInfo = getStatevectorHoverInfo();
         if (hovered && hoverInfo && statevectorContainer) {
             const phaseDeg = (((hovered.phase * 180 / Math.PI) % 360) + 360) % 360;
-            const reSign = hovered.amp.im >= 0 ? '+' : '-';
-            const imAbs = Math.abs(hovered.amp.im);
-
             hoverInfo.innerHTML =
                 `<strong>${hovered.label}</strong><br>` +
                 `Amplitude: ${hovered.magnitude.toFixed(4)}<br>` +
@@ -194,23 +192,23 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         paddingRight,
         paddingTop,
         plotHeight,
+        chartHeight,
         totalWidth,
-        totalHeight,
         step,
         barWidth,
         yTicks
     } = layout;
 
-    if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(totalHeight * dpr)) {
+    if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(chartHeight * dpr)) {
         statevectorCanvas.width = Math.floor(totalWidth * dpr);
-        statevectorCanvas.height = Math.floor(totalHeight * dpr);
+        statevectorCanvas.height = Math.floor(chartHeight * dpr);
         statevectorCanvas.style.width = `${totalWidth}px`;
-        statevectorCanvas.style.height = `${totalHeight}px`;
+        statevectorCanvas.style.height = `${chartHeight}px`;
     }
 
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, totalWidth, totalHeight);
+    ctx.clearRect(0, 0, totalWidth, chartHeight);
 
     // Draw Y-Axis Grid Lines & Ticks (0.0 to 1.0)
     ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
@@ -219,22 +217,31 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
 
     for (const tick of yTicks) {
         const y = paddingTop + (1.0 - tick) * plotHeight;
-
-        ctx.strokeStyle = tick === 0.0 ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.20)';
-        ctx.lineWidth = tick === 0.0 ? 1.5 : 1;
-        ctx.setLineDash(tick === 0.0 ? [] : [4, 4]);
-
-        ctx.beginPath();
-        ctx.moveTo(paddingLeft, y);
-        ctx.lineTo(totalWidth - paddingRight, y);
-        ctx.stroke();
-
         ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.fillText(tick.toFixed(2), paddingLeft - 8, y);
+
+        if (tick > 0.0) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, y);
+            ctx.lineTo(totalWidth - paddingRight, y);
+            ctx.stroke();
+        }
     }
     ctx.setLineDash([]);
 
     if (numStates === 0 || N === 0) {
+        const baseY = paddingTop + plotHeight;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, baseY);
+        ctx.lineTo(totalWidth - paddingRight, baseY);
+        ctx.stroke();
+
         ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
         ctx.textAlign = 'center';
         ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
@@ -333,6 +340,15 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         }
     }
 
+    // Draw X-Axis baseline on top of (over) the columns
+    const baseY = paddingTop + plotHeight;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, baseY);
+    ctx.lineTo(totalWidth - paddingRight, baseY);
+    ctx.stroke();
+
     ctx.restore();
 }
 
@@ -361,9 +377,20 @@ function getCurrentQubits() {
     return currentQubits;
 }
 
-function generateStatevectorSvg() {
-    const amplitudes = currentAmplitudes.length > 0 ? currentAmplitudes : (lastResult ? getQsphereState(lastResult).state : []);
-    const N = currentQubits || (lastResult ? getQsphereState(lastResult).N : 0);
+/*
+function generateStatevectorSvg(result = null) {
+    let amplitudes = currentAmplitudes;
+    let N = currentQubits;
+
+    if (result) {
+        const stateObj = getQsphereState(result);
+        amplitudes = stateObj.state;
+        N = stateObj.N;
+    } else if (amplitudes.length === 0 && lastResult) {
+        const stateObj = getQsphereState(lastResult);
+        amplitudes = stateObj.state;
+        N = stateObj.N;
+    }
     const numStates = 2 ** N;
 
     const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
@@ -390,18 +417,18 @@ function generateStatevectorSvg() {
         `    </style>\n` +
         `  </defs>\n`;
 
-    // Y-Axis grid lines & ticks
+    // Y-Axis grid lines & ticks (> 0.0)
     for (const tick of yTicks) {
         const y = paddingTop + (1.0 - tick) * plotHeight;
-        const isBase = tick === 0.0;
-        const strokeColor = isBase ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.20)';
-        const strokeWidth = isBase ? 1.5 : 1;
-        const dash = isBase ? '' : 'stroke-dasharray="4,4"';
-        svg += `  <line x1="${paddingLeft}" y1="${y}" x2="${totalWidth - paddingRight}" y2="${y}" stroke="${strokeColor}" stroke-width="${strokeWidth}" ${dash}/>\n`;
         svg += `  <text x="${paddingLeft - 8}" y="${y + 4}" fill="rgba(255, 255, 255, 0.85)" font-size="11" font-weight="bold" text-anchor="end">${tick.toFixed(2)}</text>\n`;
+        if (tick > 0.0) {
+            svg += `  <line x1="${paddingLeft}" y1="${y}" x2="${totalWidth - paddingRight}" y2="${y}" stroke="rgba(255, 255, 255, 0.20)" stroke-width="1" stroke-dasharray="4,4"/>\n`;
+        }
     }
 
     if (numStates === 0 || N === 0) {
+        const baseY = paddingTop + plotHeight;
+        svg += `  <line x1="${paddingLeft}" y1="${baseY}" x2="${totalWidth - paddingRight}" y2="${baseY}" stroke="rgba(255, 255, 255, 0.65)" stroke-width="1.5"/>\n`;
         svg += `  <text x="${totalWidth / 2}" y="${paddingTop + plotHeight / 2}" fill="rgba(255, 255, 255, 0.75)" font-size="13" font-weight="bold" text-anchor="middle">No quantum state declared.</text>\n` +
             `</svg>`;
         return svg;
@@ -421,24 +448,34 @@ function generateStatevectorSvg() {
         const centerX = barX + barWidth / 2;
 
         if (barHeight > 1) {
-            svg += `  <rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="3" fill="${color}"/>\n`;
+            const radius = Math.min(3, barWidth / 2, barHeight / 2);
+            if (radius > 0) {
+                // Top-rounded corners, flat base
+                svg += `  <path d="M ${barX.toFixed(2)},${(barY + barHeight).toFixed(2)} v ${(-(barHeight - radius)).toFixed(2)} a ${radius.toFixed(2)},${radius.toFixed(2)} 0 0 1 ${radius.toFixed(2)},${(-radius).toFixed(2)} h ${(barWidth - 2 * radius).toFixed(2)} a ${radius.toFixed(2)},${radius.toFixed(2)} 0 0 1 ${radius.toFixed(2)},${radius.toFixed(2)} v ${(barHeight - radius).toFixed(2)} Z" fill="${color}"/>\n`;
+            } else {
+                svg += `  <rect x="${barX.toFixed(2)}" y="${barY.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${barHeight.toFixed(2)}" fill="${color}"/>\n`;
+            }
         } else {
-            svg += `  <rect x="${barX}" y="${paddingTop + plotHeight - 1.5}" width="${barWidth}" height="1.5" fill="rgba(255, 255, 255, 0.35)"/>\n`;
+            svg += `  <rect x="${barX.toFixed(2)}" y="${(paddingTop + plotHeight - 1.5).toFixed(2)}" width="${barWidth.toFixed(2)}" height="1.5" fill="rgba(255, 255, 255, 0.35)"/>\n`;
         }
 
         if (magnitude >= 0.05) {
             const labelY = Math.max(paddingTop - 2, barY - 4);
-            svg += `  <text x="${centerX}" y="${labelY}" fill="rgba(255, 255, 255, 0.95)" font-size="10" font-weight="bold" text-anchor="middle">${magnitude.toFixed(2)}</text>\n`;
+            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="rgba(255, 255, 255, 0.95)" font-size="10" font-weight="bold" text-anchor="middle">${magnitude.toFixed(2)}</text>\n`;
         }
 
         const labelText = formatBasisState(i, N);
         const labelY = paddingTop + plotHeight + 18;
         if (step < 32 && numStates > 8) {
-            svg += `  <text x="${centerX}" y="${labelY}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="end" transform="rotate(-45, ${centerX}, ${labelY})">${labelText}</text>\n`;
+            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="end" transform="rotate(-45, ${centerX.toFixed(2)}, ${labelY.toFixed(2)})">${labelText}</text>\n`;
         } else {
-            svg += `  <text x="${centerX}" y="${labelY}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="middle">${labelText}</text>\n`;
+            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="middle">${labelText}</text>\n`;
         }
     }
+
+    // X-Axis baseline on top of (over) the columns
+    const baseY = paddingTop + plotHeight;
+    svg += `  <line x1="${paddingLeft}" y1="${baseY}" x2="${totalWidth - paddingRight}" y2="${baseY}" stroke="rgba(255, 255, 255, 0.65)" stroke-width="1.5"/>\n`;
 
     // Phase horizontal legend at the bottom
     const legendWidth = 220;
@@ -460,6 +497,7 @@ function generateStatevectorSvg() {
     svg += `</svg>`;
     return svg;
 }
+*/
 
 function generateStatevectorPng() {
     initStatevectorElements();
@@ -468,7 +506,7 @@ function generateStatevectorPng() {
     const dpr = window.devicePixelRatio || 1;
     const chartW = statevectorCanvas.width;
     const chartH = statevectorCanvas.height;
-    const legendExtraH = Math.floor(64 * dpr);
+    const legendExtraH = Math.floor(56 * dpr);
     const totalW = chartW;
     const totalH = chartH + legendExtraH;
 
@@ -487,7 +525,7 @@ function generateStatevectorPng() {
     const legendW = 220;
     const legendBarH = 10;
     const legendX = (cssTotalW - legendW) / 2;
-    const legendY = cssChartH + 20;
+    const legendY = cssChartH + 18;
 
     ctx.save();
     ctx.scale(dpr, dpr);
@@ -501,7 +539,7 @@ function generateStatevectorPng() {
         showTitle: true,
         showTicks: true,
         titleX: cssTotalW / 2,
-        titleY: legendY - 5
+        titleY: cssChartH + 8
     });
 
     ctx.restore();
@@ -563,12 +601,12 @@ const statevectorVisualization = {
     },
 
     async export() {
-        const svgContent = generateStatevectorSvg();
+        // const svgContent = generateStatevectorSvg();
         const pngDataUrl = generateStatevectorPng();
         return {
             filenamePrefix: 'statevector',
-            pngDataUrl,
-            svgContent
+            pngDataUrl
+            // svgContent
         };
     }
 };
@@ -589,27 +627,6 @@ export {
     formatPhasePi,
     getQsphereState,
     getPhaseToRgb,
-    generateStatevectorSvg,
+    // generateStatevectorSvg,
     generateStatevectorPng
 };
-
-if (typeof window !== 'undefined') {
-    window.statevector = {
-        statevectorVisualization,
-        initStatevectorElements,
-        renderStateVectorHistogram,
-        drawStateVectorHistogramWithAmplitudes,
-        stepActiveStatevectorTransition: stepStatevectorTransitionInternal,
-        stepStatevectorTransition,
-        getIsTransitioning,
-        getCurrentAmplitudes,
-        getCurrentQubits,
-        formatBasisState,
-        formatPhasePi,
-        getQsphereState,
-        getPhaseToRgb,
-        generateStatevectorSvg,
-        generateStatevectorPng
-    };
-}
-

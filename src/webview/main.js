@@ -21,7 +21,6 @@ import { drawPhaseLegendToCanvas } from './render/phaseLegend.js';
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
 const canvas = document.querySelector('#canvas');
-const statusText = document.querySelector('#status');
 const qsphereContainer = document.getElementById('container');
 const controlsContainer = document.getElementById('controls');
 
@@ -31,10 +30,6 @@ let lastParsedResult = null;
 let threeState = null;
 let isDragging = false;
 let previousMousePosition = { x: 0, y: 0 };
-
-function setStatus(message) {
-    if (statusText) statusText.textContent = '';
-}
 
 function drawPhaseLegend() {
     const verticalCanvases = document.querySelectorAll('.phase-bar-canvas');
@@ -280,7 +275,8 @@ if (exportBtn) {
                     data: {
                         name: result.filenamePrefix || currentMode,
                         pngDataUrl: result.pngDataUrl,
-                        svgContent: result.svgContent
+                        svgContent: result.svgContent,
+                        files: result.files
                     }
                 });
             }
@@ -333,7 +329,6 @@ initScene()
     })
     .catch(error => {
         console.error('Three.js renderer setup failed:', error);
-        setStatus('Renderer setup failed.');
     });
 
 window.addEventListener('resize', () => {
@@ -351,7 +346,30 @@ window.addEventListener('resize', () => {
 });
 
 let currentTargetOp = null;
-let sourceUpdateGeneration = 0;
+
+async function applyParsedUpdate(code, targetOp, targetLine) {
+    if (!code) return;
+    if (targetOp !== undefined) {
+        currentTargetOp = targetOp;
+    }
+    const result = await parseQSharp(code, currentTargetOp, targetLine);
+    if (targetLine !== undefined) {
+        console.log('Q# Inspected Line Result (line ' + (targetLine + 1) + '):', result);
+    } else {
+        console.log('Q# Parse Result:', result);
+    }
+    lastParsedResult = result;
+
+    for (const viz of getAllVisualizations()) {
+        viz.update(result);
+    }
+
+    if (threeState && currentMode === 'qsphere') {
+        try {
+            renderScene();
+        } catch (e) {}
+    }
+}
 
 window.addEventListener('message', async event => {
     const message = event.data;
@@ -368,48 +386,13 @@ window.addEventListener('message', async event => {
     }
     if (message.command === 'inspectLine') {
         if (message.data && message.data.code) {
-            const updateGeneration = ++sourceUpdateGeneration;
-            pendingCode = message.data.code;
-            if (message.data.targetOp !== undefined) {
-                currentTargetOp = message.data.targetOp;
-            }
-            const targetLine = message.data.targetLine;
-            const result = await parseQSharp(pendingCode, currentTargetOp, targetLine);
-            if (updateGeneration !== sourceUpdateGeneration) return;
-            console.log('Q# Inspected Line Result (line ' + (targetLine + 1) + '):', result);
-            lastParsedResult = result;
-
-            for (const viz of getAllVisualizations()) {
-                viz.update(result);
-            }
-        }
-        if (threeState && currentMode === 'qsphere') {
-            try {
-                renderScene();
-            } catch (e) {}
+            await applyParsedUpdate(message.data.code, message.data.targetOp, message.data.targetLine);
         }
         return;
     }
     if (message.command === 'init' || message.command === 'update') {
         if (message.data && message.data.code) {
-            const updateGeneration = ++sourceUpdateGeneration;
-            pendingCode = message.data.code;
-            if (message.data.targetOp !== undefined) {
-                currentTargetOp = message.data.targetOp;
-            }
-            const result = await parseQSharp(pendingCode, currentTargetOp);
-            if (updateGeneration !== sourceUpdateGeneration) return;
-            console.log('Q# Parse Result:', result);
-            lastParsedResult = result;
-
-            for (const viz of getAllVisualizations()) {
-                viz.update(result);
-            }
-        }
-        if (threeState && currentMode === 'qsphere') {
-            try {
-                renderScene();
-            } catch (e) {}
+            await applyParsedUpdate(message.data.code, message.data.targetOp);
         }
     }
 });
