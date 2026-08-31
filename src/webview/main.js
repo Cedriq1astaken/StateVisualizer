@@ -352,22 +352,30 @@ async function applyParsedUpdate(code, targetOp, targetLine) {
     if (targetOp !== undefined) {
         currentTargetOp = targetOp;
     }
-    const result = await parseQSharp(code, currentTargetOp, targetLine);
-    if (targetLine !== undefined) {
-        console.log('Q# Inspected Line Result (line ' + (targetLine + 1) + '):', result);
-    } else {
-        console.log('Q# Parse Result:', result);
-    }
-    lastParsedResult = result;
+    try {
+        const result = await parseQSharp(code, currentTargetOp, targetLine);
+        if (targetLine !== undefined) {
+            console.log('Q# Inspected Line Result (line ' + (targetLine + 1) + '):', result);
+        } else {
+            console.log('Q# Parse Result:', result);
+        }
+        lastParsedResult = result;
 
-    for (const viz of getAllVisualizations()) {
-        viz.update(result);
-    }
+        for (const viz of getAllVisualizations()) {
+            try {
+                viz.update(result);
+            } catch (e) {
+                console.warn('Error updating visualization:', e);
+            }
+        }
 
-    if (threeState && currentMode === 'qsphere') {
-        try {
-            renderScene();
-        } catch (e) {}
+        if (threeState && currentMode === 'qsphere') {
+            try {
+                renderScene();
+            } catch (e) {}
+        }
+    } catch (err) {
+        console.warn('Error applying parsed update:', err);
     }
 }
 

@@ -53,7 +53,7 @@
 
     <div id="densitymatrix-container" class="densitymatrix-container" aria-label="Density matrix visualization">
         <div id="densitymatrix-stats" class="densitymatrix-stats"></div>
-        <div id="densitymatrix-panels" class="densitymatrix-panels">
+        <div id="densitymatrix-panels-2d" class="densitymatrix-panels">
             <div class="densitymatrix-panel">
                 <canvas id="densitymatrix-real-canvas" class="densitymatrix-canvas"></canvas>
             </div>
@@ -61,17 +61,39 @@
                 <canvas id="densitymatrix-imag-canvas" class="densitymatrix-canvas"></canvas>
             </div>
         </div>
-        <div id="densitymatrix-legend" class="densitymatrix-legend" aria-label="Density matrix color legend">
-            <div class="phase-label phase-title">Matrix Element Value</div>
-            <div class="phase-horizontal-body">
-                <canvas id="densitymatrix-legend-canvas" class="densitymatrix-legend-canvas" width="240" height="10"></canvas>
-                <div class="densitymatrix-legend-ticks">
-                    <span class="phase-label">-1.0</span>
-                    <span class="phase-label">-0.5</span>
-                    <span class="phase-label">0.0</span>
-                    <span class="phase-label">+0.5</span>
-                    <span class="phase-label">+1.0</span>
+        <div id="densitymatrix-panels-3d" class="densitymatrix-panels" style="display: none;">
+            <div class="densitymatrix-3d-panel">
+                <div class="densitymatrix-3d-title">Real Part (Re[ρ])</div>
+                <div class="densitymatrix-3d-stage">
+                    <canvas id="densitymatrix-real-3d-canvas" class="densitymatrix-3d-canvas"></canvas>
+                    <div id="densitymatrix-real-3d-labels" class="densitymatrix-3d-labels"></div>
                 </div>
+            </div>
+            <div class="densitymatrix-3d-panel">
+                <div class="densitymatrix-3d-title">Imaginary Part (Im[ρ])</div>
+                <div class="densitymatrix-3d-stage">
+                    <canvas id="densitymatrix-imag-3d-canvas" class="densitymatrix-3d-canvas"></canvas>
+                    <div id="densitymatrix-imag-3d-labels" class="densitymatrix-3d-labels"></div>
+                </div>
+            </div>
+        </div>
+        <div id="densitymatrix-bottom-bar" class="densitymatrix-bottom-bar">
+            <div id="densitymatrix-legend" class="densitymatrix-legend" aria-label="Density matrix color legend">
+                <div class="phase-label phase-title">Matrix Element Value</div>
+                <div class="phase-horizontal-body">
+                    <canvas id="densitymatrix-legend-canvas" class="densitymatrix-legend-canvas" width="240" height="10"></canvas>
+                    <div class="densitymatrix-legend-ticks">
+                        <span class="phase-label">-1.0</span>
+                        <span class="phase-label">-0.5</span>
+                        <span class="phase-label">0.0</span>
+                        <span class="phase-label">+0.5</span>
+                        <span class="phase-label">+1.0</span>
+                    </div>
+                </div>
+            </div>
+            <div class="density-mode-toggle" role="group" aria-label="Density matrix 2D/3D mode">
+                <button type="button" class="density-toggle-btn active" data-density-mode="2d">2D</button>
+                <button type="button" class="density-toggle-btn" data-density-mode="3d">3D</button>
             </div>
         </div>
     </div>

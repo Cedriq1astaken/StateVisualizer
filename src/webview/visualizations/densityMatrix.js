@@ -1,18 +1,27 @@
+import * as THREE from 'three';
 import {
     getQsphereState,
     formatBasisState,
     formatPhasePi,
-    stepStatevectorTransition
+    stepStatevectorTransition,
+    rotateMatrix
 } from '../math/index.js';
 import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
 let densityContainer = null;
-let realCanvas = null;
-let imagCanvas = null;
+let realCanvas2D = null;
+let imagCanvas2D = null;
+let realCanvas3D = null;
+let imagCanvas3D = null;
+let realLabels3D = null;
+let imagLabels3D = null;
+let panels2D = null;
+let panels3D = null;
 let legendCanvas = null;
 let densityStats = null;
 let densityPanelsWrapper = null;
 let densityHoverInfo = null;
+let toggleBtns = [];
 
 let currentAmplitudes = [];
 let targetAmplitudes = [];
@@ -22,6 +31,12 @@ let isTransitioning = false;
 let hoveredCell = null; // { panel: 'real'|'imag', row: number, col: number }
 let isInitialized = false;
 let lastResult = null;
+let densityMode = '2d'; // '2d' | '3d'
+
+// 3D Three.js scene states
+let threeReal = null;
+let threeImag = null;
+const rotation3D = [0.55, -0.65, 0.0]; // Synchronized rotation: pitch, yaw, roll
 
 /**
  * Computes the density matrix elements rho_ij = c_i * conj(c_j)
@@ -38,7 +53,6 @@ export function computeDensityMatrix(amplitudes, N) {
         const ci = amplitudes[i] || { re: 0, im: 0 };
         for (let j = 0; j < numStates; j++) {
             const cj = amplitudes[j] || { re: 0, im: 0 };
-            // rho_ij = c_i * c_j* = (ci.re + i ci.im) * (cj.re - i cj.im)
             const re = ci.re * cj.re + ci.im * cj.im;
             const im = ci.im * cj.re - ci.re * cj.im;
             const mag = Math.sqrt(re * re + im * im);
@@ -52,7 +66,6 @@ export function computeDensityMatrix(amplitudes, N) {
 
 /**
  * Maps a scalar value in [-1, 1] to a diverging Blue-White-Red RGB color.
- * -1.0 -> Blue, 0.0 -> White, +1.0 -> Red
  * @param {number} val
  * @returns {[number, number, number]} RGB values in [0, 255]
  */
@@ -60,7 +73,6 @@ export function getBwrColorRgb(val) {
     const clamped = Math.max(-1, Math.min(1, Number.isFinite(val) ? val : 0));
 
     if (clamped > 0) {
-        // White (255, 255, 255) -> Red (235, 60, 60)
         const t = clamped;
         const r = Math.round(255 - t * (255 - 235));
         const g = Math.round(255 - t * (255 - 60));
@@ -69,7 +81,6 @@ export function getBwrColorRgb(val) {
     }
 
     if (clamped < 0) {
-        // White (255, 255, 255) -> Blue (55, 125, 245)
         const t = -clamped;
         const r = Math.round(255 - t * (255 - 55));
         const g = Math.round(255 - t * (255 - 125));
@@ -80,20 +91,13 @@ export function getBwrColorRgb(val) {
     return [255, 255, 255];
 }
 
-/**
- * Formats a scalar value to a CSS rgb string.
- * @param {number} val
- * @returns {string}
- */
 export function getBwrColor(val) {
     const [r, g, b] = getBwrColorRgb(val);
     return `rgb(${r}, ${g}, ${b})`;
 }
 
 /**
- * Computes responsive layout geometry for a single heatmap panel.
- * @param {number} numStates
- * @param {number} availablePanelWidth
+ * Computes responsive layout geometry for a single 2D heatmap panel.
  */
 export function computeHeatmapLayout(numStates, availablePanelWidth = 360) {
     const isRotated = numStates > 4;
@@ -104,38 +108,72 @@ export function computeHeatmapLayout(numStates, availablePanelWidth = 360) {
     const paddingRight = 16;
 
     const maxGridSize = Math.max(160, availablePanelWidth - labelMarginLeft - paddingRight);
-    const cellSize = numStates > 0 ? Math.max(14, Math.min(64, Math.floor(maxGridSize / numStates))) : 24;
+    const cellSize = numStates > 0 ? Math.max(14, Math.min(140, Math.floor(maxGridSize / numStates))) : 24;
     const gridSize = cellSize * numStates;
     const totalWidth = labelMarginLeft + gridSize + paddingRight;
     const totalHeight = titleHeight + labelMarginTop + gridSize + paddingBottom;
 
-    return {
-        labelMarginLeft,
-        labelMarginTop,
-        titleHeight,
-        paddingBottom,
-        paddingRight,
-        cellSize,
-        gridSize,
-        totalWidth,
-        totalHeight,
-        isRotated
-    };
+    return { labelMarginLeft, labelMarginTop, titleHeight, paddingBottom, paddingRight, cellSize, gridSize, totalWidth, totalHeight, isRotated };
 }
 
 function initDensityElements(elements = {}) {
     if (typeof document === 'undefined') return;
     densityContainer = elements.container || document.getElementById('densitymatrix-container');
-    realCanvas = elements.realCanvas || document.getElementById('densitymatrix-real-canvas');
-    imagCanvas = elements.imagCanvas || document.getElementById('densitymatrix-imag-canvas');
+    realCanvas2D = elements.realCanvas || document.getElementById('densitymatrix-real-canvas');
+    imagCanvas2D = elements.imagCanvas || document.getElementById('densitymatrix-imag-canvas');
+    realCanvas3D = document.getElementById('densitymatrix-real-3d-canvas');
+    imagCanvas3D = document.getElementById('densitymatrix-imag-3d-canvas');
+    realLabels3D = document.getElementById('densitymatrix-real-3d-labels');
+    imagLabels3D = document.getElementById('densitymatrix-imag-3d-labels');
+    panels2D = document.getElementById('densitymatrix-panels-2d');
+    panels3D = document.getElementById('densitymatrix-panels-3d');
     legendCanvas = elements.legendCanvas || document.getElementById('densitymatrix-legend-canvas');
     densityStats = elements.stats || document.getElementById('densitymatrix-stats');
-    densityPanelsWrapper = elements.panelsWrapper || document.getElementById('densitymatrix-panels');
+    densityPanelsWrapper = elements.panelsWrapper || panels2D;
 
-    if (!isInitialized && realCanvas && imagCanvas) {
+    toggleBtns = Array.from(document.querySelectorAll('.density-toggle-btn'));
+
+    if (!isInitialized) {
         setupDensityEvents();
+        setupToggleEvents();
+        init3DScenes();
         isInitialized = true;
     }
+}
+
+function setupToggleEvents() {
+    for (const btn of toggleBtns) {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.densityMode;
+            if (mode && mode !== densityMode) {
+                setDensityMode(mode);
+            }
+        });
+    }
+}
+
+function setDensityMode(mode) {
+    if (mode !== '2d' && mode !== '3d') return;
+    densityMode = mode;
+
+    for (const btn of toggleBtns) {
+        btn.classList.toggle('active', btn.dataset.densityMode === mode);
+    }
+
+    if (panels2D) panels2D.style.display = mode === '2d' ? 'flex' : 'none';
+    if (panels3D) panels3D.style.display = mode === '3d' ? 'flex' : 'none';
+
+    if (mode === '3d') {
+        resize3DRenderers();
+        update3DScenes(currentAmplitudes, currentQubits);
+        render3DScenes();
+    } else {
+        drawDensityMatrixWithAmplitudes(currentAmplitudes, currentQubits);
+    }
+}
+
+function getDensityMode() {
+    return densityMode;
 }
 
 function getDensityHoverInfo() {
@@ -144,8 +182,8 @@ function getDensityHoverInfo() {
     return densityHoverInfo;
 }
 
-function handleCanvasMouseMove(canvas, panelType, event, numStates, layout) {
-    if (document.body?.dataset.visualizationMode !== 'densitymatrix' || numStates === 0) return;
+function handleCanvasMouseMove2D(canvas, panelType, event, numStates, layout) {
+    if (document.body?.dataset.visualizationMode !== 'densitymatrix' || numStates === 0 || densityMode !== '2d') return;
 
     const rect = canvas.getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
@@ -160,30 +198,7 @@ function handleCanvasMouseMove(canvas, panelType, event, numStates, layout) {
 
         if (row >= 0 && row < numStates && col >= 0 && col < numStates) {
             hoveredCell = { panel: panelType, row, col };
-            const matrix = computeDensityMatrix(currentAmplitudes, currentQubits);
-            const cellData = matrix[row]?.[col] || { re: 0, im: 0, mag: 0, phase: 0 };
-
-            const hoverInfo = getDensityHoverInfo();
-            if (hoverInfo && densityContainer) {
-                const rowLabel = formatBasisState(row, currentQubits);
-                const colLabel = formatBasisState(col, currentQubits);
-                const phaseDeg = (((cellData.phase * 180 / Math.PI) % 360) + 360) % 360;
-
-                hoverInfo.innerHTML =
-                    `<strong>ρ<sub>${rowLabel},${colLabel}</sub></strong> (Row ${row}, Col ${jToStr(col)})<br>` +
-                    `Real Part: ${cellData.re >= 0 ? '+' : ''}${cellData.re.toFixed(4)}<br>` +
-                    `Imag Part: ${cellData.im >= 0 ? '+' : ''}${cellData.im.toFixed(4)}<br>` +
-                    `Magnitude: ${cellData.mag.toFixed(4)}<br>` +
-                    `Phase: ${phaseDeg.toFixed(1)}° (${formatPhasePi(cellData.phase)})`;
-
-                const containerRect = densityContainer.getBoundingClientRect();
-                const posX = event.clientX - containerRect.left + 12;
-                const posY = event.clientY - containerRect.top + 12;
-
-                hoverInfo.style.left = `${Math.min(containerRect.width - 160, Math.max(8, posX))}px`;
-                hoverInfo.style.top = `${Math.min(containerRect.height - 90, Math.max(8, posY))}px`;
-                hoverInfo.hidden = false;
-            }
+            showTooltipForCell(row, col, event);
             return;
         }
     }
@@ -193,85 +208,425 @@ function handleCanvasMouseMove(canvas, panelType, event, numStates, layout) {
     if (hoverInfo) hoverInfo.hidden = true;
 }
 
-function jToStr(col) {
-    return formatBasisState(col, currentQubits);
+function showTooltipForCell(row, col, event) {
+    const matrix = computeDensityMatrix(currentAmplitudes, currentQubits);
+    const cellData = matrix[row]?.[col] || { re: 0, im: 0, mag: 0, phase: 0 };
+
+    const hoverInfo = getDensityHoverInfo();
+    if (hoverInfo && densityContainer) {
+        const rowLabel = formatBasisState(row, currentQubits);
+        const colLabel = formatBasisState(col, currentQubits);
+        const phaseDeg = (((cellData.phase * 180 / Math.PI) % 360) + 360) % 360;
+
+        hoverInfo.innerHTML =
+            `<strong>ρ<sub>${rowLabel},${colLabel}</sub></strong> (Row ${rowLabel}, Col ${colLabel})<br>` +
+            `Real Part: ${cellData.re >= 0 ? '+' : ''}${cellData.re.toFixed(4)}<br>` +
+            `Imag Part: ${cellData.im >= 0 ? '+' : ''}${cellData.im.toFixed(4)}<br>` +
+            `Magnitude: ${cellData.mag.toFixed(4)}<br>` +
+            `Phase: ${phaseDeg.toFixed(1)}° (${formatPhasePi(cellData.phase)})`;
+
+        const containerRect = densityContainer.getBoundingClientRect();
+        const posX = event.clientX - containerRect.left + 12;
+        const posY = event.clientY - containerRect.top + 12;
+
+        hoverInfo.style.left = `${Math.min(containerRect.width - 160, Math.max(8, posX))}px`;
+        hoverInfo.style.top = `${Math.min(containerRect.height - 90, Math.max(8, posY))}px`;
+        hoverInfo.hidden = false;
+    }
+}
+
+function getAvailablePanelWidth() {
+    const containerWidth = densityContainer?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 600) || 600;
+    const halfWidth = Math.floor((containerWidth - 32) / 2);
+    return Math.min(360, Math.max(160, halfWidth));
 }
 
 function setupDensityEvents() {
-    if (!realCanvas || !imagCanvas) return;
+    if (realCanvas2D && imagCanvas2D) {
+        const onLeave = () => {
+            hoveredCell = null;
+            const hoverInfo = getDensityHoverInfo();
+            if (hoverInfo) hoverInfo.hidden = true;
+        };
 
-    const numStates = 2 ** currentQubits;
-    const panelWidth = Math.min(420, Math.max(240, ((densityPanelsWrapper?.clientWidth || 800) - 32) / 2));
-    const layout = computeHeatmapLayout(numStates, panelWidth);
+        realCanvas2D.addEventListener('mousemove', e => {
+            const numStates = 2 ** currentQubits;
+            const panelWidth = getAvailablePanelWidth();
+            const layout = computeHeatmapLayout(numStates, panelWidth);
+            handleCanvasMouseMove2D(realCanvas2D, 'real', e, numStates, layout);
+        });
 
-    realCanvas.addEventListener('mousemove', e => handleCanvasMouseMove(realCanvas, 'real', e, 2 ** currentQubits, layout));
-    imagCanvas.addEventListener('mousemove', e => handleCanvasMouseMove(imagCanvas, 'imag', e, 2 ** currentQubits, layout));
+        imagCanvas2D.addEventListener('mousemove', e => {
+            const numStates = 2 ** currentQubits;
+            const panelWidth = getAvailablePanelWidth();
+            const layout = computeHeatmapLayout(numStates, panelWidth);
+            handleCanvasMouseMove2D(imagCanvas2D, 'imag', e, numStates, layout);
+        });
 
-    const onLeave = () => {
-        hoveredCell = null;
-        const hoverInfo = getDensityHoverInfo();
-        if (hoverInfo) hoverInfo.hidden = true;
-    };
-
-    realCanvas.addEventListener('mouseleave', onLeave);
-    imagCanvas.addEventListener('mouseleave', onLeave);
+        realCanvas2D.addEventListener('mouseleave', onLeave);
+        imagCanvas2D.addEventListener('mouseleave', onLeave);
+    }
 }
 
-/**
- * Draws a single heatmap (Real or Imaginary) onto a 2D Canvas context.
- */
-function drawHeatmapToContext(ctx, options) {
-    const {
-        matrix,
-        numStates,
-        N,
-        isReal,
-        title,
-        layout,
-        dpr = 1
-    } = options;
+function createSingle3DScene(canvasElement, isReal) {
+    if (!canvasElement) return null;
 
-    const {
-        labelMarginLeft,
-        labelMarginTop,
-        titleHeight,
-        cellSize,
-        gridSize,
-        totalWidth,
-        totalHeight,
-        isRotated
-    } = layout;
+    const width = canvasElement.clientWidth || 340;
+    const height = canvasElement.clientHeight || 320;
+
+    const renderer = new THREE.WebGLRenderer({
+        canvas: canvasElement,
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: true
+    });
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setSize(width, height, false);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+    camera.position.set(0, 3.8, 5.0);
+    camera.lookAt(0, 0.1, 0);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.15);
+    dirLight.position.set(5, 12, 8);
+    scene.add(dirLight);
+
+    const backLight = new THREE.DirectionalLight(0x90b0e0, 0.45);
+    backLight.position.set(-5, -6, -8);
+    scene.add(backLight);
+
+    const ambLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambLight);
+
+    const plotGroup = new THREE.Group();
+    scene.add(plotGroup);
+
+    const barGroup = new THREE.Group();
+    plotGroup.add(barGroup);
+
+    const gridGroup = new THREE.Group();
+    plotGroup.add(gridGroup);
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    let isDragging = false;
+    let prevMouse = { x: 0, y: 0 };
+
+    canvasElement.addEventListener('mousedown', e => {
+        isDragging = true;
+        prevMouse = { x: e.clientX, y: e.clientY };
+    });
+
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const dx = e.clientX - prevMouse.x;
+        const dy = e.clientY - prevMouse.y;
+
+        rotation3D[1] += dx * 0.006;
+        rotation3D[0] += dy * 0.006;
+        rotation3D[0] = Math.max(-1.15, Math.min(1.15, rotation3D[0]));
+
+        prevMouse = { x: e.clientX, y: e.clientY };
+        render3DScenes();
+    });
+
+    window.addEventListener('mouseup', () => { isDragging = false; });
+
+    canvasElement.addEventListener('mousemove', e => {
+        if (isDragging) return;
+        handle3DMouseMove(canvasElement, scene, camera, raycaster, mouse, isReal, e);
+    });
+
+    canvasElement.addEventListener('mouseleave', () => {
+        const hoverInfo = getDensityHoverInfo();
+        if (hoverInfo) hoverInfo.hidden = true;
+    });
+
+    return {
+        canvas: canvasElement,
+        renderer,
+        scene,
+        camera,
+        plotGroup,
+        barGroup,
+        gridGroup,
+        isReal,
+        labelData: []
+    };
+}
+
+function init3DScenes() {
+    if (typeof document === 'undefined') return;
+    if (realCanvas3D && !threeReal) {
+        threeReal = createSingle3DScene(realCanvas3D, true);
+    }
+    if (imagCanvas3D && !threeImag) {
+        threeImag = createSingle3DScene(imagCanvas3D, false);
+    }
+}
+
+function handle3DMouseMove(canvas, scene, camera, raycaster, mouse, isReal, event) {
+    if (densityMode !== '3d') return;
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(scene.children, true);
+
+    for (const hit of intersects) {
+        let obj = hit.object;
+        while (obj && !obj.userData?.isBar && obj.parent) {
+            obj = obj.parent;
+        }
+        if (obj?.userData?.isBar) {
+            const { row, col } = obj.userData;
+            showTooltipForCell(row, col, event);
+            return;
+        }
+    }
+
+    const hoverInfo = getDensityHoverInfo();
+    if (hoverInfo) hoverInfo.hidden = true;
+}
+
+function resize3DRenderers(layout) {
+    const numStates = 2 ** currentQubits;
+    const panelWidth = getAvailablePanelWidth();
+    const curLayout = layout || computeHeatmapLayout(numStates, panelWidth);
+
+    const width = curLayout.totalWidth;
+    const height = Math.max(120, curLayout.totalHeight - curLayout.titleHeight);
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+
+    for (const inst of [threeReal, threeImag]) {
+        if (!inst || !inst.canvas) continue;
+        inst.canvas.style.width = `${width}px`;
+        inst.canvas.style.height = `${height}px`;
+        inst.canvas.width = Math.floor(width * dpr);
+        inst.canvas.height = Math.floor(height * dpr);
+        if (inst.canvas.parentElement) {
+            inst.canvas.parentElement.style.width = `${width}px`;
+            inst.canvas.parentElement.style.height = `${height}px`;
+        }
+        if (inst.canvas.parentElement?.parentElement) {
+            inst.canvas.parentElement.parentElement.style.width = `${width}px`;
+        }
+
+        inst.renderer.setSize(width, height, false);
+        inst.renderer.setPixelRatio(dpr);
+        inst.camera.aspect = width / height;
+        inst.camera.updateProjectionMatrix();
+    }
+}
+
+function update3DScenes(amplitudes, N) {
+    if (!threeReal && !threeImag) return;
+    const numStates = 2 ** N;
+    const matrix = computeDensityMatrix(amplitudes, N);
+
+    const panelWidth = getAvailablePanelWidth();
+    const layout = computeHeatmapLayout(numStates, panelWidth);
+    resize3DRenderers(layout);
+
+    if (threeReal) updateSingle3DScene(threeReal, matrix, numStates, N, true, realLabels3D);
+    if (threeImag) updateSingle3DScene(threeImag, matrix, numStates, N, false, imagLabels3D);
+}
+
+function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
+    const { barGroup, gridGroup } = inst;
+
+    while (barGroup.children.length > 0) {
+        const child = barGroup.children[0];
+        barGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+            else child.material.dispose();
+        }
+    }
+
+    while (gridGroup.children.length > 0) {
+        const child = gridGroup.children[0];
+        gridGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+    }
+
+    inst.labelData = [];
+    if (labelsDiv) labelsDiv.innerHTML = '';
+
+    if (numStates === 0) return;
+
+    const spacing = Math.min(0.55, 2.5 / numStates);
+    const barSize = spacing * 0.76;
+    const maxHeight = 1.8;
+    const gridTotal = numStates * spacing;
+    const halfGrid = gridTotal / 2;
+
+    const baseGeo = new THREE.PlaneGeometry(gridTotal, gridTotal);
+    baseGeo.rotateX(-Math.PI / 2);
+    const baseMat = new THREE.MeshBasicMaterial({
+        color: 0x1f2438,
+        transparent: true,
+        opacity: 0.55,
+        side: THREE.DoubleSide
+    });
+    gridGroup.add(new THREE.Mesh(baseGeo, baseMat));
+
+    const gridLines = [];
+    for (let i = 0; i <= numStates; i++) {
+        const pos = -halfGrid + i * spacing;
+        gridLines.push(-halfGrid, 0, pos, halfGrid, 0, pos);
+        gridLines.push(pos, 0, -halfGrid, pos, 0, halfGrid);
+    }
+    const gridLineGeo = new THREE.BufferGeometry();
+    gridLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridLines, 3));
+    const gridLineMat = new THREE.LineBasicMaterial({ color: 0x4a5568, transparent: true, opacity: 0.5 });
+    gridGroup.add(new THREE.LineSegments(gridLineGeo, gridLineMat));
+
+    const borderLines = [
+        -halfGrid, -maxHeight, -halfGrid, -halfGrid, maxHeight, -halfGrid,
+        -halfGrid, 0, -halfGrid, halfGrid, 0, -halfGrid,
+        -halfGrid, 0, -halfGrid, -halfGrid, 0, halfGrid
+    ];
+    const borderGeo = new THREE.BufferGeometry();
+    borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(borderLines, 3));
+    const borderMat = new THREE.LineBasicMaterial({ color: 0x718096, transparent: true, opacity: 0.6 });
+    gridGroup.add(new THREE.LineSegments(borderGeo, borderMat));
+
+    for (let i = 0; i < numStates; i++) {
+        for (let j = 0; j < numStates; j++) {
+            const cell = matrix[i]?.[j] || { re: 0, im: 0 };
+            const val = isReal ? cell.re : cell.im;
+            const mag = Math.abs(val);
+
+            const x = -halfGrid + j * spacing + spacing / 2;
+            const z = -halfGrid + i * spacing + spacing / 2;
+
+            if (mag < 1e-4) {
+                const padGeo = new THREE.BoxGeometry(barSize, 0.02, barSize);
+                const padMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+                const pad = new THREE.Mesh(padGeo, padMat);
+                pad.position.set(x, 0.01, z);
+                pad.userData = { isBar: true, row: i, col: j, val };
+                barGroup.add(pad);
+                continue;
+            }
+
+            const h = Math.max(0.04, mag * maxHeight);
+            const centerY = val >= 0 ? h / 2 : -h / 2;
+
+            const boxGeo = new THREE.BoxGeometry(barSize, h, barSize);
+            const [r, g, b] = getBwrColorRgb(val);
+            const boxMat = new THREE.MeshLambertMaterial({
+                color: new THREE.Color(r / 255, g / 255, b / 255)
+            });
+            const bar = new THREE.Mesh(boxGeo, boxMat);
+            bar.position.set(x, centerY, z);
+            bar.userData = { isBar: true, row: i, col: j, val };
+
+            const edgeGeo = new THREE.EdgesGeometry(boxGeo);
+            const edgeMat = new THREE.LineBasicMaterial({ color: 0x1a202c, linewidth: 1 });
+            const edges = new THREE.LineSegments(edgeGeo, edgeMat);
+            bar.add(edges);
+
+            barGroup.add(bar);
+        }
+    }
+
+    if (labelsDiv) {
+        for (let j = 0; j < numStates; j++) {
+            const x = -halfGrid + j * spacing + spacing / 2;
+            const z = halfGrid + 0.22;
+            const ket = formatBasisState(j, N);
+            const el = document.createElement('div');
+            el.className = 'density-3d-label';
+            el.textContent = ket;
+            labelsDiv.appendChild(el);
+            inst.labelData.push({ el, pos: [x, 0, z] });
+        }
+
+        for (let i = 0; i < numStates; i++) {
+            const x = -halfGrid - 0.22;
+            const z = -halfGrid + i * spacing + spacing / 2;
+            const ket = formatBasisState(i, N);
+            const el = document.createElement('div');
+            el.className = 'density-3d-label';
+            el.textContent = ket;
+            labelsDiv.appendChild(el);
+            inst.labelData.push({ el, pos: [x, 0, z] });
+        }
+    }
+}
+
+function render3DScenes() {
+    if (densityMode !== '3d') return;
+    for (const inst of [threeReal, threeImag]) {
+        if (!inst) continue;
+        inst.plotGroup.rotation.set(rotation3D[0], rotation3D[1], rotation3D[2]);
+        try {
+            inst.renderer.render(inst.scene, inst.camera);
+            update3DLabels(inst);
+        } catch (e) {}
+    }
+}
+
+function update3DLabels(inst) {
+    if (!inst?.canvas || !inst.labelData) return;
+    const w = inst.canvas.clientWidth || 340;
+    const h = inst.canvas.clientHeight || 320;
+
+    for (const item of inst.labelData) {
+        const pt = project3DPoint(item.pos, inst.camera, w, h);
+        if (pt) {
+            item.el.style.transform = `translate(-50%, -50%) translate(${pt[0]}px, ${pt[1]}px)`;
+            item.el.style.display = 'block';
+        } else {
+            item.el.style.display = 'none';
+        }
+    }
+}
+
+function project3DPoint(pos, camera, width, height) {
+    const v = new THREE.Vector3(pos[0], pos[1], pos[2]);
+    v.applyEuler(new THREE.Euler(rotation3D[0], rotation3D[1], rotation3D[2], 'XYZ'));
+    v.project(camera);
+
+    if (v.z > 1.0) return null;
+
+    const screenX = (v.x * 0.5 + 0.5) * width;
+    const screenY = (-v.y * 0.5 + 0.5) * height;
+    return [screenX, screenY];
+}
+
+function drawHeatmapToContext(ctx, options) {
+    const { matrix, numStates, N, title, layout, dpr = 1 } = options;
+    const { labelMarginLeft, labelMarginTop, titleHeight, cellSize, gridSize, totalWidth, totalHeight, isRotated } = layout;
 
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, totalWidth, totalHeight);
 
-    // Title header
     ctx.font = '600 13px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = '#e6e6ee';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(title, totalWidth / 2, titleHeight / 2);
 
-    if (numStates === 0 || N === 0) {
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
-        ctx.fillText('No quantum state declared.', totalWidth / 2, totalHeight / 2);
-        ctx.restore();
-        return;
-    }
-
     const startX = labelMarginLeft;
     const startY = titleHeight + labelMarginTop;
 
-    // Draw Column labels (top)
     ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
     ctx.fillStyle = '#e0e0e0';
 
     for (let j = 0; j < numStates; j++) {
         const colText = formatBasisState(j, N);
         const colCenterX = startX + j * cellSize + cellSize / 2;
-
         if (isRotated) {
             ctx.save();
             ctx.translate(colCenterX, startY - 8);
@@ -287,263 +642,185 @@ function drawHeatmapToContext(ctx, options) {
         }
     }
 
-    // Draw Row labels (left) and Heatmap Cells
     for (let i = 0; i < numStates; i++) {
         const rowText = formatBasisState(i, N);
         const rowCenterY = startY + i * cellSize + cellSize / 2;
-
-        ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
-        ctx.fillStyle = '#e0e0e0';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
         ctx.fillText(rowText, startX - 8, rowCenterY);
 
         for (let j = 0; j < numStates; j++) {
+            const cellX = startX + j * cellSize;
+            const cellY = startY + i * cellSize;
             const cell = matrix[i]?.[j] || { re: 0, im: 0, mag: 0, phase: 0 };
-            const val = isReal ? cell.re : cell.im;
-
-            const x = startX + j * cellSize;
-            const y = startY + i * cellSize;
-
-            // Cell fill
+            const val = options.isReal ? cell.re : cell.im;
             ctx.fillStyle = getBwrColor(val);
-            ctx.fillRect(x, y, cellSize, cellSize);
-
-            // Cell border
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(x, y, cellSize, cellSize);
+            ctx.fillRect(cellX, cellY, cellSize, cellSize);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
+            ctx.strokeRect(cellX, cellY, cellSize, cellSize);
+            if (hoveredCell && hoveredCell.panel === (options.isReal ? 'real' : 'imag') && hoveredCell.row === i && hoveredCell.col === j) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(cellX + 1, cellY + 1, cellSize - 2, cellSize - 2);
+            }
         }
     }
-
-    // Outer grid border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     ctx.lineWidth = 1.5;
     ctx.strokeRect(startX, startY, gridSize, gridSize);
-
     ctx.restore();
 }
 
-/**
- * Draws the horizontal -1 to +1 diverging Blue-White-Red color bar.
- */
-export function drawBwrLegendToCanvas(ctx, options = {}) {
-    const {
-        x = 0,
-        y = 0,
-        width = 220,
-        height = 10,
-        title = 'Matrix Element Value',
-        textColor = '#e6e6ee',
-        showTitle = true,
-        showTicks = true
-    } = options;
-
-    if (!ctx || !width || !height) return;
-
-    if (showTitle) {
+function drawBwrLegendToCanvas(ctx, options) {
+    const { x, y, width = 240, height = 10, title, textColor = '#e6e6ee', showTitle = true, showTicks = true } = options;
+    ctx.save();
+    if (showTitle && title) {
         ctx.font = '600 11px system-ui, -apple-system, sans-serif';
         ctx.fillStyle = textColor;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'bottom';
-        ctx.fillText(title, x + width / 2, y - 5);
+        ctx.fillText(title, x + width / 2, y - 6);
     }
-
-    // Draw continuous Blue-White-Red color gradient
-    for (let px = 0; px < width; px++) {
-        const fraction = width > 1 ? px / (width - 1) : 0; // 0 to 1
-        const val = fraction * 2 - 1; // -1 to +1
-        ctx.fillStyle = getBwrColor(val);
-        ctx.fillRect(x + px, y, 1, height);
-    }
-
-    // Border around color bar
+    const grad = ctx.createLinearGradient(x, y, x + width, y);
+    grad.addColorStop(0.0, 'rgb(55, 125, 245)');
+    grad.addColorStop(0.5, 'rgb(255, 255, 255)');
+    grad.addColorStop(1.0, 'rgb(235, 60, 60)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, width, height);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    ctx.lineWidth = 1;
     ctx.strokeRect(x, y, width, height);
-
     if (showTicks) {
-        const ticks = [
-            { label: '-1.0', frac: 0 },
-            { label: '-0.5', frac: 0.25 },
-            { label: '0.0', frac: 0.5 },
-            { label: '+0.5', frac: 0.75 },
-            { label: '+1.0', frac: 1.0 }
-        ];
-
-        ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+        ctx.font = '600 10px system-ui, -apple-system, sans-serif';
         ctx.fillStyle = textColor;
-        ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-
-        for (const tick of ticks) {
-            const tickX = x + tick.frac * width;
-            ctx.fillText(tick.label, tickX, y + height + 5);
+        const ticks = [
+            { label: '-1.0', align: 'left', tx: x },
+            { label: '-0.5', align: 'center', tx: x + width * 0.25 },
+            { label: '0.0', align: 'center', tx: x + width * 0.5 },
+            { label: '+0.5', align: 'center', tx: x + width * 0.75 },
+            { label: '+1.0', align: 'right', tx: x + width }
+        ];
+        for (const t of ticks) {
+            ctx.textAlign = t.align;
+            ctx.fillText(t.label, t.tx, y + height + 4);
         }
     }
+    ctx.restore();
 }
 
 function drawDensityMatrixWithAmplitudes(amplitudes, N) {
     initDensityElements();
-    if (!realCanvas || !imagCanvas) return;
-
-    const realCtx = realCanvas.getContext('2d');
-    const imagCtx = imagCanvas.getContext('2d');
-    if (!realCtx || !imagCtx) return;
-
     const numStates = 2 ** N;
     const matrix = computeDensityMatrix(amplitudes, N);
 
-    if (densityStats) {
-        let nonZeroCount = 0;
-        for (let i = 0; i < numStates; i++) {
-            for (let j = 0; j < numStates; j++) {
-                if (matrix[i][j].mag > 1e-4) nonZeroCount++;
-            }
+    let purity = 0;
+    for (let i = 0; i < numStates; i++) {
+        for (let j = 0; j < numStates; j++) {
+            const cell = matrix[i][j];
+            purity += cell.re * cell.re + cell.im * cell.im;
         }
-        densityStats.textContent = N > 0
-            ? `${N} Qubit${N > 1 ? 's' : ''} • ${numStates}×${numStates} Matrix • ${nonZeroCount} Non-Zero Elements`
-            : '';
     }
 
-    const dpr = window.devicePixelRatio || 1;
-    const wrapperWidth = densityPanelsWrapper?.clientWidth || 800;
-    const availablePanelWidth = Math.min(420, Math.max(240, (wrapperWidth - 32) / 2));
-    const layout = computeHeatmapLayout(numStates, availablePanelWidth);
-
-    // Resize Real Canvas
-    if (realCanvas.width !== Math.floor(layout.totalWidth * dpr) || realCanvas.height !== Math.floor(layout.totalHeight * dpr)) {
-        realCanvas.width = Math.floor(layout.totalWidth * dpr);
-        realCanvas.height = Math.floor(layout.totalHeight * dpr);
-        realCanvas.style.width = `${layout.totalWidth}px`;
-        realCanvas.style.height = `${layout.totalHeight}px`;
+    if (densityStats) {
+        densityStats.textContent = `Dimension: ${numStates}×${numStates} (${N} Qubit${N === 1 ? '' : 's'}) | Pure State (Tr(ρ²) = ${purity.toFixed(2)})`;
     }
 
-    // Resize Imaginary Canvas
-    if (imagCanvas.width !== Math.floor(layout.totalWidth * dpr) || imagCanvas.height !== Math.floor(layout.totalHeight * dpr)) {
-        imagCanvas.width = Math.floor(layout.totalWidth * dpr);
-        imagCanvas.height = Math.floor(layout.totalHeight * dpr);
-        imagCanvas.style.width = `${layout.totalWidth}px`;
-        imagCanvas.style.height = `${layout.totalHeight}px`;
-    }
-
-    // Draw Real Heatmap
-    drawHeatmapToContext(realCtx, {
-        matrix,
-        numStates,
-        N,
-        isReal: true,
-        title: 'Real Part (Re[ρ])',
-        layout,
-        dpr
-    });
-
-    // Draw Imaginary Heatmap
-    drawHeatmapToContext(imagCtx, {
-        matrix,
-        numStates,
-        N,
-        isReal: false,
-        title: 'Imaginary Part (Im[ρ])',
-        layout,
-        dpr
-    });
-
-    // Draw Color Bar Legend
     if (legendCanvas) {
         const legCtx = legendCanvas.getContext('2d');
         if (legCtx) {
-            legCtx.clearRect(0, 0, legendCanvas.width, legendCanvas.height);
-            drawBwrLegendToCanvas(legCtx, {
-                x: 0,
-                y: 0,
-                width: legendCanvas.width,
-                height: legendCanvas.height,
-                showTitle: false,
-                showTicks: false
-            });
+            const dpr = window.devicePixelRatio || 1;
+            legendCanvas.width = 240 * dpr;
+            legendCanvas.height = 10 * dpr;
+            legCtx.save();
+            legCtx.scale(dpr, dpr);
+            const grad = legCtx.createLinearGradient(0, 0, 240, 0);
+            grad.addColorStop(0.0, 'rgb(55, 125, 245)');
+            grad.addColorStop(0.5, 'rgb(255, 255, 255)');
+            grad.addColorStop(1.0, 'rgb(235, 60, 60)');
+            legCtx.fillStyle = grad;
+            legCtx.fillRect(0, 0, 240, 10);
+            legCtx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            legCtx.strokeRect(0, 0, 240, 10);
+            legCtx.restore();
         }
     }
+
+    if (densityMode === '3d') {
+        update3DScenes(amplitudes, N);
+        render3DScenes();
+        return;
+    }
+
+    if (!realCanvas2D || !imagCanvas2D) return;
+    const panelWidth = getAvailablePanelWidth();
+    const layout = computeHeatmapLayout(numStates, panelWidth);
+    const dpr = window.devicePixelRatio || 1;
+    realCanvas2D.width = layout.totalWidth * dpr;
+    realCanvas2D.height = layout.totalHeight * dpr;
+    realCanvas2D.style.width = `${layout.totalWidth}px`;
+    realCanvas2D.style.height = `${layout.totalHeight}px`;
+    drawHeatmapToContext(realCanvas2D.getContext('2d'), { matrix, numStates, N, isReal: true, title: 'Real Part (Re[ρ])', layout, dpr });
+    imagCanvas2D.width = layout.totalWidth * dpr;
+    imagCanvas2D.height = layout.totalHeight * dpr;
+    imagCanvas2D.style.width = `${layout.totalWidth}px`;
+    imagCanvas2D.style.height = `${layout.totalHeight}px`;
+    drawHeatmapToContext(imagCanvas2D.getContext('2d'), { matrix, numStates, N, isReal: false, title: 'Imaginary Part (Im[ρ])', layout, dpr });
 }
 
 function generateDensityMatrixPng() {
     if (typeof document === 'undefined') return '';
-
-    let amplitudes = currentAmplitudes;
-    let N = currentQubits;
-
-    if (amplitudes.length === 0 && lastResult) {
-        const stateObj = getQsphereState(lastResult);
-        amplitudes = stateObj.state;
-        N = stateObj.N;
-    }
+    const N = currentQubits || (lastResult ? getQsphereState(lastResult).N : 0);
+    const amplitudes = currentAmplitudes.length > 0 ? currentAmplitudes : (lastResult ? getQsphereState(lastResult).state : []);
     const numStates = 2 ** N;
     const matrix = computeDensityMatrix(amplitudes, N);
-
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    const panelWidth = 360;
-    const layout = computeHeatmapLayout(numStates, panelWidth);
 
+    if (densityMode === '3d' && threeReal && threeImag) {
+        threeReal.renderer.render(threeReal.scene, threeReal.camera);
+        threeImag.renderer.render(threeImag.scene, threeImag.camera);
+        const stageW = threeReal.canvas.width;
+        const stageH = threeReal.canvas.height;
+        const padding = 20 * dpr;
+        const gap = 24 * dpr;
+        const legendH = 50 * dpr;
+        const totalW = stageW * 2 + gap + padding * 2;
+        const totalH = stageH + legendH + padding * 2;
+        const offscreen = document.createElement('canvas');
+        offscreen.width = totalW;
+        offscreen.height = totalH;
+        const ctx = offscreen.getContext('2d');
+        if (!ctx) return threeReal.canvas.toDataURL('image/png');
+        ctx.drawImage(threeReal.canvas, padding, padding);
+        ctx.drawImage(threeImag.canvas, padding + stageW + gap, padding);
+        ctx.save();
+        ctx.scale(dpr, dpr);
+        ctx.font = '600 13px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#e6e6ee';
+        ctx.textAlign = 'center';
+        ctx.fillText('Real Part (Re[ρ])', (padding + stageW / 2) / dpr, (padding - 6) / dpr);
+        ctx.fillText('Imaginary Part (Im[ρ])', (padding + stageW + gap + stageW / 2) / dpr, (padding - 6) / dpr);
+        drawBwrLegendToCanvas(ctx, { x: (totalW / dpr - 240) / 2, y: (padding + stageH + 16 * dpr) / dpr, width: 240, height: 10, title: 'Matrix Element Value', textColor: '#e6e6ee', showTitle: true, showTicks: true });
+        ctx.restore();
+        return offscreen.toDataURL('image/png');
+    }
+
+    const layout = computeHeatmapLayout(numStates, 360);
+    const padding = 20;
     const gap = 24;
-    const padding = 16;
-    const legendH = 50;
-    const totalW = padding * 2 + layout.totalWidth * 2 + gap;
-    const totalH = padding * 2 + layout.totalHeight + legendH;
-
+    const totalW = (layout.totalWidth * 2 + gap + padding * 2) * dpr;
+    const totalH = (layout.totalHeight + 55 + padding * 2) * dpr;
     const offscreen = document.createElement('canvas');
-    offscreen.width = Math.floor(totalW * dpr);
-    offscreen.height = Math.floor(totalH * dpr);
+    offscreen.width = totalW;
+    offscreen.height = totalH;
     const ctx = offscreen.getContext('2d');
     if (!ctx) return '';
-
     ctx.save();
     ctx.scale(dpr, dpr);
-
-    // Draw Real Heatmap on left
-    ctx.save();
     ctx.translate(padding, padding);
-    drawHeatmapToContext(ctx, {
-        matrix,
-        numStates,
-        N,
-        isReal: true,
-        title: 'Real Part (Re[ρ])',
-        layout,
-        dpr: 1
-    });
-    ctx.restore();
-
-    // Draw Imaginary Heatmap on right
-    ctx.save();
-    ctx.translate(padding + layout.totalWidth + gap, padding);
-    drawHeatmapToContext(ctx, {
-        matrix,
-        numStates,
-        N,
-        isReal: false,
-        title: 'Imaginary Part (Im[ρ])',
-        layout,
-        dpr: 1
-    });
-    ctx.restore();
-
-    // Draw Centered Legend at bottom
-    const legW = 240;
-    const legH = 10;
-    const legX = (totalW - legW) / 2;
-    const legY = padding + layout.totalHeight + 18;
-
-    drawBwrLegendToCanvas(ctx, {
-        x: legX,
-        y: legY,
-        width: legW,
-        height: legH,
-        title: 'Matrix Element Value',
-        textColor: '#e6e6ee',
-        showTitle: true,
-        showTicks: true
-    });
-
+    drawHeatmapToContext(ctx, { matrix, numStates, N, isReal: true, title: 'Real Part (Re[ρ])', layout, dpr: 1 });
+    ctx.translate(layout.totalWidth + gap, 0);
+    drawHeatmapToContext(ctx, { matrix, numStates, N, isReal: false, title: 'Imaginary Part (Im[ρ])', layout, dpr: 1 });
+    drawBwrLegendToCanvas(ctx, { x: ((layout.totalWidth * 2 + gap + padding * 2) - 240) / 2 - padding, y: layout.totalHeight + 18, width: 240, height: 10, title: 'Matrix Element Value', textColor: '#e6e6ee', showTitle: true, showTicks: true });
     ctx.restore();
     return offscreen.toDataURL('image/png');
 }
@@ -551,7 +828,6 @@ function generateDensityMatrixPng() {
 const densityMatrixVisualization = {
     id: 'densitymatrix',
     label: 'Density Matrix',
-
     mount(container) {
         initDensityElements();
         const densityContainerEl = document.getElementById('densitymatrix-container');
@@ -559,6 +835,7 @@ const densityMatrixVisualization = {
             densityContainerEl.hidden = false;
             densityContainerEl.style.display = 'flex';
         }
+        if (densityMode === '3d') resize3DRenderers();
         if (currentAmplitudes.length > 0) {
             drawDensityMatrixWithAmplitudes(currentAmplitudes, currentQubits);
         } else if (lastResult) {
@@ -566,7 +843,6 @@ const densityMatrixVisualization = {
             drawDensityMatrixWithAmplitudes(state, N);
         }
     },
-
     unmount() {
         const densityContainerEl = document.getElementById('densitymatrix-container');
         if (densityContainerEl) {
@@ -576,25 +852,19 @@ const densityMatrixVisualization = {
         const hoverInfo = getDensityHoverInfo();
         if (hoverInfo) hoverInfo.hidden = true;
     },
-
     update(result) {
         if (!result) return;
         lastResult = result;
         initDensityElements();
-
         const { state, N } = getQsphereState(result);
-
         targetAmplitudes = state;
         targetQubits = N;
-
         if (currentQubits !== N || currentAmplitudes.length !== state.length) {
             currentQubits = N;
             currentAmplitudes = Array.from({ length: state.length }, () => ({ re: 0, im: 0 }));
         }
-
         isTransitioning = true;
     },
-
     animate(lerpFactor = 0.20) {
         if (isTransitioning) {
             const transition = stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFactor, 1e-4);
@@ -602,9 +872,10 @@ const densityMatrixVisualization = {
             currentAmplitudes = transition.currentAmplitudes;
             drawDensityMatrixWithAmplitudes(currentAmplitudes, currentQubits);
         }
+        if (densityMode === '3d') render3DScenes();
     },
-
     resize() {
+        if (densityMode === '3d') resize3DRenderers();
         if (currentAmplitudes.length > 0) {
             drawDensityMatrixWithAmplitudes(currentAmplitudes, currentQubits);
         } else if (lastResult) {
@@ -612,13 +883,8 @@ const densityMatrixVisualization = {
             drawDensityMatrixWithAmplitudes(state, N);
         }
     },
-
     async export() {
-        const pngDataUrl = generateDensityMatrixPng();
-        return {
-            filenamePrefix: 'densitymatrix',
-            pngDataUrl
-        };
+        return { filenamePrefix: 'densitymatrix', pngDataUrl: generateDensityMatrixPng() };
     }
 };
 
@@ -628,5 +894,7 @@ export {
     densityMatrixVisualization,
     initDensityElements,
     drawDensityMatrixWithAmplitudes,
-    generateDensityMatrixPng
+    generateDensityMatrixPng,
+    setDensityMode,
+    getDensityMode
 };

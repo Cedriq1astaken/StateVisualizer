@@ -65,16 +65,34 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
         let skipNextSnapshot = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
-            const step = await debugService.evalNext(breakpointIds, events);
+            let step;
+            try {
+                step = await debugService.evalNext(breakpointIds, events);
+            } catch (err) {
+                if (result.states.length === 0) {
+                    result.error = formatFailure(err?.message || err);
+                }
+                break;
+            }
+
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
-            const stackFrames = targetOp ? await debugService.getStackFrames() : [];
+            let stackFrames = [];
+            if (targetOp) {
+                try {
+                    stackFrames = await debugService.getStackFrames();
+                } catch (e) {}
+            }
             const isInsideTargetOp = !targetOp || stackFrames.some(
                 frame => frame.name.trim() === targetOp.name
             );
 
             const isResetLine = range && resetLines.has(range.start.line);
 
-            const snapshot = snapshotFromEntries(await debugService.captureQuantumState());
+            let captured = [];
+            try {
+                captured = await debugService.captureQuantumState();
+            } catch (e) {}
+            const snapshot = snapshotFromEntries(captured);
 
             if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
                 result.qubitsDeclared = Math.max(result.qubitsDeclared, snapshot.qubits);
@@ -96,7 +114,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
             if (hasTargetLine && range && range.start.line > targetLine) {
                 break;
             }
-
 
             if (step.id === StepResultId.Fail) {
                 if (result.states.length === 0) {

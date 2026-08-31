@@ -120,4 +120,13 @@ describe('Density Matrix Visualization Module', () => {
         assert.strictEqual(typeof densityMatrixVisualization.update, 'function');
         assert.strictEqual(typeof densityMatrixVisualization.export, 'function');
     });
+
+    test('setDensityMode and getDensityMode toggles between 2d and 3d', async () => {
+        const { setDensityMode, getDensityMode } = await import('../src/webview/visualizations/densityMatrix.js');
+        assert.strictEqual(getDensityMode(), '2d');
+        setDensityMode('3d');
+        assert.strictEqual(getDensityMode(), '3d');
+        setDensityMode('2d');
+        assert.strictEqual(getDensityMode(), '2d');
+    });
 });
