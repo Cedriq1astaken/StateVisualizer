@@ -27,6 +27,9 @@
         <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="qsphere">
             Q-sphere
         </button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="densitymatrix">
+            Density Matrix
+        </button>
     </div>
 
     <div id="statevector-container">
@@ -43,6 +46,31 @@
                     <span class="phase-label">π</span>
                     <span class="phase-label">3π/2</span>
                     <span class="phase-label">2π</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="densitymatrix-container" class="densitymatrix-container" aria-label="Density matrix visualization">
+        <div id="densitymatrix-stats" class="densitymatrix-stats"></div>
+        <div id="densitymatrix-panels" class="densitymatrix-panels">
+            <div class="densitymatrix-panel">
+                <canvas id="densitymatrix-real-canvas" class="densitymatrix-canvas"></canvas>
+            </div>
+            <div class="densitymatrix-panel">
+                <canvas id="densitymatrix-imag-canvas" class="densitymatrix-canvas"></canvas>
+            </div>
+        </div>
+        <div id="densitymatrix-legend" class="densitymatrix-legend" aria-label="Density matrix color legend">
+            <div class="phase-label phase-title">Matrix Element Value</div>
+            <div class="phase-horizontal-body">
+                <canvas id="densitymatrix-legend-canvas" class="densitymatrix-legend-canvas" width="240" height="10"></canvas>
+                <div class="densitymatrix-legend-ticks">
+                    <span class="phase-label">-1.0</span>
+                    <span class="phase-label">-0.5</span>
+                    <span class="phase-label">0.0</span>
+                    <span class="phase-label">+0.5</span>
+                    <span class="phase-label">+1.0</span>
                 </div>
             </div>
         </div>

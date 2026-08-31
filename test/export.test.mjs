@@ -23,6 +23,7 @@ import {
     blochVisualization
 } from '../src/webview/visualizations/bloch.js';
 import { computeQsphereWithState, qsphereVisualization } from '../src/webview/visualizations/qsphere.js';
+import { densityMatrixVisualization } from '../src/webview/visualizations/densityMatrix.js';
 import { createPerspectiveMatrix, createTranslationMatrix, mult } from '../src/webview/math/index.js';
 
 describe('Visualization PNG Export Structure (SVG deactivated)', () => {
@@ -53,6 +54,12 @@ describe('Visualization PNG Export Structure (SVG deactivated)', () => {
         const exportResult = await qsphereVisualization.export();
         assert.strictEqual(exportResult.filenamePrefix, 'qsphere');
         assert.strictEqual(exportResult.svgContent, undefined, 'SVG is deactivated');
+    });
+
+    test('Density Matrix export returns PNG without SVG', async () => {
+        const result = await densityMatrixVisualization.export();
+        assert.strictEqual(result.filenamePrefix, 'densitymatrix');
+        assert.strictEqual(result.svgContent, undefined, 'SVG is deactivated');
     });
 });
 

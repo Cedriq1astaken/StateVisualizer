@@ -24,6 +24,7 @@
 import statevectorVisualization from './statevector.js';
 import blochVisualization from './bloch.js';
 import qsphereVisualization from './qsphere.js';
+import densityMatrixVisualization from './densityMatrix.js';
 
 /** @type {Map<string, VisualizationPlugin>} */
 const visualizations = new Map();
@@ -43,6 +44,7 @@ function registerVisualization(plugin) {
 registerVisualization(statevectorVisualization);
 registerVisualization(blochVisualization);
 registerVisualization(qsphereVisualization);
+registerVisualization(densityMatrixVisualization);
 
 /**
  * Retrieve a visualization plugin by its id.
@@ -68,7 +70,8 @@ export {
     getAllVisualizations,
     statevectorVisualization,
     blochVisualization,
-    qsphereVisualization
+    qsphereVisualization,
+    densityMatrixVisualization
 };
 
 export default {

@@ -142,7 +142,7 @@ function rebuildQsphereLabels(points, N, state) {
         el.textContent = '|' + binaryStr + '⟩';
         el.dataset.ptIndex = String(pt.index);
         qsLabelsDiv.appendChild(el);
-        _qsLabelData.push({ el, pos: [pt.x * 1.15, pt.y * 1.15, pt.z * 1.15] });
+        _qsLabelData.push({ el, pos: [pt.x * 1.18, pt.y * 1.18, pt.z * 1.18] });
     }
 }
 

@@ -98,19 +98,29 @@ body {
 }
 
 body[data-visualization-mode="statevector"] #qsphere-view-wrapper,
-body[data-visualization-mode="statevector"] #controls {
+body[data-visualization-mode="statevector"] #controls,
+body[data-visualization-mode="statevector"] #densitymatrix-container {
     display: none !important;
     visibility: hidden !important;
 }
 
 body[data-visualization-mode="bloch"] #qsphere-view-wrapper,
-body[data-visualization-mode="bloch"] #statevector-container {
+body[data-visualization-mode="bloch"] #statevector-container,
+body[data-visualization-mode="bloch"] #densitymatrix-container {
     display: none !important;
     visibility: hidden !important;
 }
 
 body[data-visualization-mode="qsphere"] #controls,
-body[data-visualization-mode="qsphere"] #statevector-container {
+body[data-visualization-mode="qsphere"] #statevector-container,
+body[data-visualization-mode="qsphere"] #densitymatrix-container {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+body[data-visualization-mode="densitymatrix"] #qsphere-view-wrapper,
+body[data-visualization-mode="densitymatrix"] #controls,
+body[data-visualization-mode="densitymatrix"] #statevector-container {
     display: none !important;
     visibility: hidden !important;
 }
@@ -121,6 +131,81 @@ body[data-visualization-mode="statevector"] #statevector-container {
 
 body[data-visualization-mode="qsphere"] #qsphere-view-wrapper {
     display: flex !important;
+}
+
+body[data-visualization-mode="densitymatrix"] #densitymatrix-container {
+    display: flex !important;
+}
+
+.densitymatrix-container {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    width: min(100%, 1100px);
+    position: relative;
+    margin: 0 0 16px;
+}
+
+.densitymatrix-stats {
+    color: rgba(230, 230, 238, 0.75);
+    font: 600 12px system-ui, -apple-system, sans-serif;
+    margin: 0 0 12px;
+    letter-spacing: 0.2px;
+    text-align: center;
+}
+
+.densitymatrix-panels {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 24px;
+    width: 100%;
+}
+
+.densitymatrix-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.densitymatrix-canvas {
+    display: block;
+    background-color: transparent;
+}
+
+.densitymatrix-legend {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin: 16px 0 12px;
+    user-select: none;
+}
+
+.densitymatrix-legend-canvas {
+    width: 240px;
+    height: 10px;
+    display: block;
+}
+
+.densitymatrix-legend-ticks {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    width: 240px;
+    padding: 0;
+    margin: 0;
+}
+
+#container[hidden],
+#controls[hidden],
+#statevector-container[hidden],
+#densitymatrix-container[hidden],
+#qsphere-view-wrapper[hidden] {
+    display: none !important;
 }
 
 #qsphere-view-wrapper {
@@ -140,11 +225,10 @@ body[data-visualization-mode="qsphere"] #qsphere-view-wrapper {
     flex: 0 0 270px;
 }
 
-#container[hidden],
-#controls[hidden],
-#statevector-container[hidden],
-#qsphere-view-wrapper[hidden] {
-    display: none !important;
+#qs-labels {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
 }
 
 .phase-column-legend {
