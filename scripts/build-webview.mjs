@@ -8,6 +8,8 @@ const packageRoot = path.resolve(scriptsDir, '..');
 
 const runtimeEntry = path.join(packageRoot, 'src', 'webview', 'runtime', 'qsharpRuntime.js');
 const runtimeBundle = path.join(packageRoot, 'dist', 'qsharpRuntime.bundle.js');
+const qiskitRuntimeEntry = path.join(packageRoot, 'src', 'webview', 'runtime', 'qiskitRuntime.js');
+const qiskitRuntimeBundle = path.join(packageRoot, 'dist', 'qiskitRuntime.bundle.js');
 const wasmSource = path.join(
     packageRoot,
     'node_modules',
@@ -39,6 +41,12 @@ await build({
     ...sharedBuildOptions,
     entryPoints: [runtimeEntry],
     outfile: runtimeBundle
+});
+
+await build({
+    ...sharedBuildOptions,
+    entryPoints: [qiskitRuntimeEntry],
+    outfile: qiskitRuntimeBundle
 });
 
 await build({

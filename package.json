@@ -1,7 +1,7 @@
 {
   "name": "state-visualizer",
   "displayName": "StateVisualizer",
-  "description": "Interactive quantum state visualizer with live step-through execution for Q#",
+  "description": "Interactive quantum state visualizer with live step-through execution for Q# and Qiskit",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,7 +11,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:qsharp"
+    "onLanguage:qsharp",
+    "onLanguage:python"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -46,7 +47,7 @@
       {
         "command": "qsphere.inspectCurrentLine",
         "key": "shift+enter",
-        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp)"
+        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python)"
       }
     ],
     "menus": {
@@ -54,19 +55,19 @@
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         }
       ],
       "editor/context": [
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         },
         {
           "command": "qsphere.inspectCurrentLine",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         }
       ]
     }

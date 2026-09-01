@@ -164,16 +164,28 @@ function renderScene() {
 }
 
 let pendingCode = null;
+let currentFileName = null;
+
+function isPythonFile(fileName) {
+    return typeof fileName === 'string' && fileName.endsWith('.py');
+}
+
+async function executeParser(code, targetOp, targetLine, fileName) {
+    if (isPythonFile(fileName) && typeof parseQiskit === 'function') {
+        return parseQiskit(code, targetLine);
+    }
+    return parseQSharp(code, targetOp, targetLine);
+}
 
 async function initScene() {
     const testQsUri = canvas.dataset.testQs || 'samples/test.qs';
 
     if (pendingCode) {
         try {
-            const result = await parseQSharp(pendingCode);
+            const result = await executeParser(pendingCode, null, undefined, currentFileName);
             lastParsedResult = result;
         } catch (e) {
-            console.warn('Could not parse pending Q# code:', e);
+            console.warn('Could not parse pending code:', e);
         }
     }
 
@@ -285,7 +297,7 @@ function setLiveUpdate(enabled) {
     if (isLiveUpdate && pendingLiveUpdate) {
         const update = pendingLiveUpdate;
         pendingLiveUpdate = null;
-        applyParsedUpdate(update.code, update.targetOp);
+        applyParsedUpdate(update.code, update.targetOp, undefined, update.fileName);
     }
 }
 
@@ -425,17 +437,21 @@ function frame() {
 
 let currentTargetOp = null;
 
-async function applyParsedUpdate(code, targetOp, targetLine) {
+async function applyParsedUpdate(code, targetOp, targetLine, fileName) {
     if (!code) return;
     if (targetOp !== undefined) {
         currentTargetOp = targetOp;
     }
+    if (fileName !== undefined) {
+        currentFileName = fileName;
+    }
     try {
-        const result = await parseQSharp(code, currentTargetOp, targetLine);
+        const result = await executeParser(code, currentTargetOp, targetLine, currentFileName);
+        const lang = isPythonFile(currentFileName) ? 'Qiskit' : 'Q#';
         if (targetLine !== undefined) {
-            console.log('Q# Inspected Line Result (line ' + (targetLine + 1) + '):', result);
+            console.log(lang + ' Inspected Line Result (line ' + (targetLine + 1) + '):', result);
         } else {
-            console.log('Q# Parse Result:', result);
+            console.log(lang + ' Parse Result:', result);
         }
         lastParsedResult = result;
         updateLatexDisplay(result);
@@ -520,22 +536,22 @@ if (typeof window !== 'undefined') {
         }
         if (message.command === 'inspectLine') {
             if (message.data && message.data.code) {
-                await applyParsedUpdate(message.data.code, message.data.targetOp, message.data.targetLine);
+                await applyParsedUpdate(message.data.code, message.data.targetOp, message.data.targetLine, message.data.fileName);
             }
             return;
         }
         if (message.command === 'init') {
             if (message.data && message.data.code) {
-                await applyParsedUpdate(message.data.code, message.data.targetOp);
+                await applyParsedUpdate(message.data.code, message.data.targetOp, undefined, message.data.fileName);
             }
             return;
         }
         if (message.command === 'update') {
             if (message.data && message.data.code) {
                 if (isLiveUpdate) {
-                    await applyParsedUpdate(message.data.code, message.data.targetOp);
+                    await applyParsedUpdate(message.data.code, message.data.targetOp, undefined, message.data.fileName);
                 } else {
-                    pendingLiveUpdate = { code: message.data.code, targetOp: message.data.targetOp };
+                    pendingLiveUpdate = { code: message.data.code, targetOp: message.data.targetOp, fileName: message.data.fileName };
                 }
             }
         }

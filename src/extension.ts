@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('Qsphere extension active for .qs files!');
+    console.log('StateVisualizer extension active for .qs and .py files!');
 
     let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
     let activePanel: vscode.WebviewPanel | undefined;
@@ -140,7 +140,8 @@ export function activate(context: vscode.ExtensionContext) {
         let updateTimer: ReturnType<typeof setTimeout> | undefined;
         const trackedUri = sourceDocument?.uri.toString();
         const changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
-            if (!event.document.fileName.endsWith('.qs')) return;
+            const fn = event.document.fileName;
+            if (!fn.endsWith('.qs') && !fn.endsWith('.py')) return;
             if (trackedUri && event.document.uri.toString() !== trackedUri) return;
 
             // Clear any previous line inspection decoration when text is edited / newlines inserted
@@ -228,61 +229,134 @@ export function activate(context: vscode.ExtensionContext) {
         return mainOp || firstOp;
     }
 
+    function findPythonCircuit(doc: vscode.TextDocument): { name: string, startLine: number, endLine: number } | null {
+        const circuitPattern = /^(\s*)(\w+)\s*=\s*(?:\w+\.)*QuantumCircuit\s*\(\s*(\d+)/;
+
+        // Detect aliased QuantumCircuit names
+        const fullText = doc.getText();
+        const aliasMatch = fullText.match(/from\s+qiskit(?:\.\w+)*\s+import\s+QuantumCircuit\s+as\s+(\w+)/);
+        const classNames = ['QuantumCircuit'];
+        if (aliasMatch) classNames.push(aliasMatch[1]);
+
+        const classPattern = classNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+        const dynamicCircuitRe = new RegExp(`^(\\s*)(\\w+)\\s*=\\s*(?:\\w+\\.)*(?:${classPattern})\\s*\\(\\s*(?:num_qubits\\s*=\\s*)?(\\d+)`);
+
+        for (let line = 0; line < doc.lineCount; line++) {
+            const lineText = doc.lineAt(line).text;
+            const match = lineText.match(dynamicCircuitRe);
+            if (!match) continue;
+
+            const varName = match[2];
+            const varPattern = new RegExp(`\\b${varName}\\b`);
+
+            // Find end of circuit usage (last line referencing varName)
+            let endLine = line;
+            for (let j = line + 1; j < doc.lineCount; j++) {
+                if (varPattern.test(doc.lineAt(j).text)) endLine = j;
+            }
+
+            return { name: varName, startLine: line, endLine };
+        }
+
+        return null;
+    }
+
     const inspectCurrentLineDisposable = vscode.commands.registerCommand('qsphere.inspectCurrentLine', () => {
         const activeEditor = vscode.window.activeTextEditor;
         if (!activeEditor) return;
 
         const document = activeEditor.document;
-        if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return;
+        const isPython = document.fileName.endsWith('.py') || document.languageId === 'python';
+        const isQSharp = document.fileName.endsWith('.qs') || document.languageId === 'qsharp';
+        if (!isPython && !isQSharp) return;
 
-        const mainOp = findMainOperation(document);
         const cursorLine = activeEditor.selection.active.line;
 
-        // Shift + Enter only activates when inside Main
-        if (!mainOp || cursorLine < mainOp.startLine || cursorLine > mainOp.endLine) {
-            return;
-        }
+        if (isQSharp) {
+            const mainOp = findMainOperation(document);
+            if (!mainOp || cursorLine < mainOp.startLine || cursorLine > mainOp.endLine) {
+                return;
+            }
 
-        // If on an empty line, find the nearest preceding code line within Main
-        let effectiveLine = cursorLine;
-        while (effectiveLine > mainOp.startLine && document.lineAt(effectiveLine).text.trim().length === 0) {
-            effectiveLine--;
-        }
+            let effectiveLine = cursorLine;
+            while (effectiveLine > mainOp.startLine && document.lineAt(effectiveLine).text.trim().length === 0) {
+                effectiveLine--;
+            }
 
-        const lineText = document.lineAt(effectiveLine).text.trim();
+            const lineText = document.lineAt(effectiveLine).text.trim();
+            const lineRange = document.lineAt(effectiveLine).range;
+            activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
 
-        // Highlight the single line being visualized
-        const lineRange = document.lineAt(effectiveLine).range;
-        activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
+            let nextLine = cursorLine + 1;
+            while (nextLine < mainOp.endLine && document.lineAt(nextLine).text.trim().length === 0) {
+                nextLine++;
+            }
+            if (nextLine <= mainOp.endLine) {
+                const nextLineEnd = document.lineAt(nextLine).range.end;
+                activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
+                activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
+            }
 
+            const payload = {
+                fileName: document.fileName,
+                code: document.getText(),
+                targetLine: effectiveLine,
+                lineText,
+                targetOp: mainOp
+            };
 
-        // Advance cursor to the next non-empty code line within Main
-        let nextLine = cursorLine + 1;
-        while (nextLine < mainOp.endLine && document.lineAt(nextLine).text.trim().length === 0) {
-            nextLine++;
-        }
-        if (nextLine <= mainOp.endLine) {
-            const nextLineEnd = document.lineAt(nextLine).range.end;
-            activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
-            activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
-        }
-
-        const payload = {
-            fileName: document.fileName,
-            code: document.getText(),
-            targetLine: effectiveLine,
-            lineText,
-            targetOp: mainOp
-        };
-
-        if (!activePanel) {
-            pendingInspectPayload = payload;
-            vscode.commands.executeCommand('qsphere.openVisualizer', mainOp);
+            if (!activePanel) {
+                pendingInspectPayload = payload;
+                vscode.commands.executeCommand('qsphere.openVisualizer', mainOp);
+            } else {
+                activePanel.webview.postMessage({
+                    command: 'inspectLine',
+                    data: payload
+                });
+            }
         } else {
-            activePanel.webview.postMessage({
-                command: 'inspectLine',
-                data: payload
-            });
+            // Python / Qiskit
+            const circuit = findPythonCircuit(document);
+            if (!circuit || cursorLine < circuit.startLine || cursorLine > circuit.endLine) {
+                return;
+            }
+
+            let effectiveLine = cursorLine;
+            while (effectiveLine > circuit.startLine && document.lineAt(effectiveLine).text.trim().length === 0) {
+                effectiveLine--;
+            }
+
+            const lineText = document.lineAt(effectiveLine).text.trim();
+            const lineRange = document.lineAt(effectiveLine).range;
+            activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
+
+            let nextLine = cursorLine + 1;
+            while (nextLine < circuit.endLine && document.lineAt(nextLine).text.trim().length === 0) {
+                nextLine++;
+            }
+            if (nextLine <= circuit.endLine) {
+                const nextLineEnd = document.lineAt(nextLine).range.end;
+                activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
+                activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
+            }
+
+            const payload = {
+                fileName: document.fileName,
+                code: document.getText(),
+                targetLine: effectiveLine,
+                lineText,
+                targetOp: circuit
+            };
+
+            if (!activePanel) {
+                pendingInspectPayload = payload;
+                vscode.commands.executeCommand('qsphere.openVisualizer', circuit);
+            } else {
+                activePanel.webview.postMessage({
+                    command: 'inspectLine',
+                    data: payload
+                });
+            }
         }
     });
 
@@ -310,11 +384,32 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    const pythonCodeLensProvider = vscode.languages.registerCodeLensProvider(
+        [{ pattern: '**/*.py' }, { language: 'python' }],
+        {
+            provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+                if (!document.fileName.endsWith('.py') && document.languageId !== 'python') return [];
+                const circuit = findPythonCircuit(document);
+                if (!circuit) return [];
+
+                return [
+                    new vscode.CodeLens(new vscode.Range(circuit.startLine, 0, circuit.startLine, 0), {
+                        title: 'State',
+                        command: 'qsphere.openVisualizer',
+                        arguments: [circuit],
+                        tooltip: 'Open StateVisualizer for Qiskit circuit'
+                    })
+                ];
+            }
+        }
+    );
+
     context.subscriptions.push(
         openVisualizerDisposable,
         inspectCurrentLineDisposable,
         replayAnimationDisposable,
         codeLensProvider,
+        pythonCodeLensProvider,
         lineHighlightDecoration
     );
 }
@@ -332,6 +427,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const katexCssPath = path.join(extRoot, 'dist', 'katex', 'katex.min.css');
     const runtimePath = path.join(extRoot, 'dist', 'qsharpRuntime.bundle.js');
     const runtimeUiPath = path.join(extRoot, 'src', 'webview', 'runtime', 'qsharpRuntimeUi.js');
+    const qiskitRuntimePath = path.join(extRoot, 'dist', 'qiskitRuntime.bundle.js');
     const webviewBundlePath = path.join(extRoot, 'dist', 'webview.bundle.js');
     const wasmPath = path.join(extRoot, 'assets', 'wasm', 'qsc_wasm_bg.wasm');
     const testQsPath = path.join(extRoot, 'samples', 'test.qs');
@@ -345,6 +441,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
         .replace('dist/katex/katex.min.css', uri(katexCssPath))
         .replace('dist/qsharpRuntime.bundle.js', uri(runtimePath))
         .replace('runtime/qsharpRuntimeUi.js', uri(runtimeUiPath))
+        .replace('dist/qiskitRuntime.bundle.js', uri(qiskitRuntimePath))
         .replace('dist/webview.bundle.js', uri(webviewBundlePath))
         .replace('assets/wasm/qsc_wasm_bg.wasm', uri(wasmPath))
         .replace('samples/test.qs', uri(testQsPath));
