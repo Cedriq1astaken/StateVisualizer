@@ -807,8 +807,10 @@ function generateDensityMatrixPng() {
     const layout = computeHeatmapLayout(numStates, 360);
     const padding = 20;
     const gap = 24;
-    const totalW = (layout.totalWidth * 2 + gap + padding * 2) * dpr;
-    const totalH = (layout.totalHeight + 55 + padding * 2) * dpr;
+    const cssTotalW = layout.totalWidth * 2 + gap + padding * 2;
+    const cssTotalH = layout.totalHeight + 55 + padding * 2;
+    const totalW = cssTotalW * dpr;
+    const totalH = cssTotalH * dpr;
     const offscreen = document.createElement('canvas');
     offscreen.width = totalW;
     offscreen.height = totalH;
@@ -816,11 +818,27 @@ function generateDensityMatrixPng() {
     if (!ctx) return '';
     ctx.save();
     ctx.scale(dpr, dpr);
+
+    ctx.save();
     ctx.translate(padding, padding);
     drawHeatmapToContext(ctx, { matrix, numStates, N, isReal: true, title: 'Real Part (Re[ρ])', layout, dpr: 1 });
-    ctx.translate(layout.totalWidth + gap, 0);
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(padding + layout.totalWidth + gap, padding);
     drawHeatmapToContext(ctx, { matrix, numStates, N, isReal: false, title: 'Imaginary Part (Im[ρ])', layout, dpr: 1 });
-    drawBwrLegendToCanvas(ctx, { x: ((layout.totalWidth * 2 + gap + padding * 2) - 240) / 2 - padding, y: layout.totalHeight + 18, width: 240, height: 10, title: 'Matrix Element Value', textColor: '#e6e6ee', showTitle: true, showTicks: true });
+    ctx.restore();
+
+    drawBwrLegendToCanvas(ctx, {
+        x: (cssTotalW - 240) / 2,
+        y: padding + layout.totalHeight + 18,
+        width: 240,
+        height: 10,
+        title: 'Matrix Element Value',
+        textColor: '#e6e6ee',
+        showTitle: true,
+        showTicks: true
+    });
     ctx.restore();
     return offscreen.toDataURL('image/png');
 }

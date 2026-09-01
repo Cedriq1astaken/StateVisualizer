@@ -129,4 +129,18 @@ describe('Density Matrix Visualization Module', () => {
         setDensityMode('2d');
         assert.strictEqual(getDensityMode(), '2d');
     });
+
+    test('2D export legend calculation centers Matrix Element Value legend', () => {
+        const numStates = 4;
+        const layout = computeHeatmapLayout(numStates, 360);
+        const padding = 20;
+        const gap = 24;
+        const cssTotalW = layout.totalWidth * 2 + gap + padding * 2;
+        const legendW = 240;
+        const legendX = (cssTotalW - legendW) / 2;
+
+        assert.strictEqual(legendX + legendW / 2, cssTotalW / 2, 'Legend center should match total canvas center');
+        assert.ok(legendX > padding, 'Legend start X should be greater than left padding');
+        assert.ok(legendX + legendW < cssTotalW - padding, 'Legend end X should be within canvas bounds');
+    });
 });
