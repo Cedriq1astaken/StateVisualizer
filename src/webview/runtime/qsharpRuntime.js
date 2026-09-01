@@ -23,6 +23,22 @@ function snapshotFromEntries(entries) {
     return { amplitudes, qubits };
 }
 
+function areSnapshotsEqual(snapshotA, snapshotB, tolerance = 1e-9) {
+    if (!snapshotA || !snapshotB) return false;
+    if (snapshotA.qubits !== snapshotB.qubits) return false;
+    const ampsA = snapshotA.amplitudes;
+    const ampsB = snapshotB.amplitudes;
+    if (ampsA.length !== ampsB.length) return false;
+    for (let i = 0; i < ampsA.length; i++) {
+        const a = ampsA[i];
+        const b = ampsB[i];
+        if (Math.abs(a.re - b.re) > tolerance || Math.abs(a.im - b.im) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function snapshotSignature(snapshot) {
     return `${snapshot.qubits}:${snapshot.amplitudes.map(value => `${value.re.toPrecision(12)},${value.im.toPrecision(12)}`).join(';')}`;
 }
@@ -36,7 +52,7 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
     const debugService = await getDebugService();
     const sourceName = fileName || 'main.qs';
     const result = { qubitsDeclared: 0, qubitsList: [], states: [], steps: [] };
-    let lastSignature = null;
+    let lastSnapshot = null;
 
     const resetPattern = /^\s*Reset(All)?\s*\(/i;
     const resetLines = new Set(
@@ -88,18 +104,19 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
 
             const isResetLine = range && resetLines.has(range.start.line);
 
-            let captured = [];
-            try {
-                captured = await debugService.captureQuantumState();
-            } catch (e) {}
-            const snapshot = snapshotFromEntries(captured);
+            if (isInsideTargetOp && !skipNextSnapshot) {
+                let captured = [];
+                try {
+                    captured = await debugService.captureQuantumState();
+                } catch (e) {}
+                const snapshot = snapshotFromEntries(captured);
 
-            if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
-                result.qubitsDeclared = Math.max(result.qubitsDeclared, snapshot.qubits);
-                const signature = snapshotSignature(snapshot);
-                if (signature !== lastSignature) {
-                    lastSignature = signature;
-                    result.states.push(snapshot);
+                if (snapshot) {
+                    result.qubitsDeclared = Math.max(result.qubitsDeclared, snapshot.qubits);
+                    if (!areSnapshotsEqual(snapshot, lastSnapshot)) {
+                        lastSnapshot = snapshot;
+                        result.states.push(snapshot);
+                    }
                 }
             }
 
@@ -125,12 +142,15 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
         }
 
         if (!hasTargetLine) {
-            const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+            let captured = [];
+            try {
+                captured = await debugService.captureQuantumState();
+            } catch (e) {}
+            const finalSnapshot = snapshotFromEntries(captured);
             if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
                 result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
-                const signature = snapshotSignature(finalSnapshot);
-                if (signature !== lastSignature) {
-                    lastSignature = signature;
+                if (!areSnapshotsEqual(finalSnapshot, lastSnapshot)) {
+                    lastSnapshot = finalSnapshot;
                     result.states.push(finalSnapshot);
                 }
             }

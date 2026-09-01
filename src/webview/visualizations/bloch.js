@@ -331,6 +331,7 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
         if (!dragging) return;
         rotation[1] += (event.clientX - previousX) * 0.005;
         previousX = event.clientX;
+        rendererObj.needsRender = true;
     });
     canvasElement.addEventListener('mouseup', () => { dragging = false; });
     canvasElement.addEventListener('mouseleave', () => { dragging = false; });
@@ -358,7 +359,8 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
         qubitIndex,
         hoverInfo: null,
         arrowVector: arrowResult.screenVector,
-        _projMatrix: projMatrix
+        _projMatrix: projMatrix,
+        needsRender: true
     };
 
     try {
@@ -367,6 +369,7 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
 
         canvasElement.addEventListener('mousemove', event => {
             updateArrowHover(rendererObj, event);
+            rendererObj.needsRender = true;
         });
         canvasElement.addEventListener('mouseleave', () => {
             if (rendererObj.hoverInfo) rendererObj.hoverInfo.hidden = true;
@@ -380,9 +383,18 @@ function createMiniRenderer(canvasElement, result, qubitIndex, previousVector, p
 
 function renderMiniRenderer(renderer) {
     if (!renderer.threeRenderer) return;
+
     const current = renderer.currentVector;
     const target = renderer.targetVector;
-    if (!vectorsClose(current, target)) {
+    const isVectorClose = vectorsClose(current, target);
+    const hasQueuedSteps = Boolean(renderer.stepQueue && renderer.stepQueue.length > 0);
+
+    const isSettled = isVectorClose && !hasQueuedSteps;
+    if (isSettled && !renderer.needsRender) {
+        return;
+    }
+
+    if (!isVectorClose) {
         const nextVector = interpolateVector(current, target, 0.25);
         renderer.currentVector = vectorsClose(nextVector, target) ? [...target] : nextVector;
 
@@ -396,7 +408,7 @@ function renderMiniRenderer(renderer) {
             }
         }
         renderer.arrowGroup.add(createArrowMesh(renderer.currentVector, renderer.arrowMaterial));
-    } else if (renderer.stepQueue && renderer.stepQueue.length > 0) {
+    } else if (hasQueuedSteps) {
         renderer.targetVector = renderer.stepQueue.shift();
     }
 
@@ -407,6 +419,10 @@ function renderMiniRenderer(renderer) {
         renderer.threeRenderer.render(renderer.scene, renderer.camera);
     } catch (e) {
         // Suppress transient render errors
+    }
+
+    if (vectorsClose(renderer.currentVector, renderer.targetVector) && (!renderer.stepQueue || renderer.stepQueue.length === 0)) {
+        renderer.needsRender = false;
     }
 }
 
@@ -466,6 +482,7 @@ function populateQubitColumn(result) {
             renderer.targetVector = arrowResult.screenVector || [0, 1, 0];
             renderer.stepQueue = [];
             renderer.arrowVector = arrowResult.screenVector;
+            renderer.needsRender = true;
             const card = column.children[i];
             if (card) {
                 const label = card.querySelector('.qubit-mini-label');
@@ -520,6 +537,7 @@ function replayAnimation() {
         renderer.currentVector = [...firstVector];
         renderer.targetVector = [...nextTarget];
         renderer.stepQueue = stepVectors.slice(2);
+        renderer.needsRender = true;
 
         while (renderer.arrowGroup.children.length > 0) {
             const c = renderer.arrowGroup.children[0];

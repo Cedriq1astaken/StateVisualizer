@@ -313,14 +313,16 @@ function frame() {
 initScene()
     .then(state => {
         threeState = state;
-        if (lastParsedResult) {
-            for (const viz of getAllVisualizations()) {
-                viz.update(lastParsedResult);
-            }
-        }
         const activeViz = getVisualization(currentMode);
         if (activeViz?.mount) {
             activeViz.mount(null, { threeState, canvas });
+        }
+        if (lastParsedResult) {
+            try {
+                activeViz?.update(lastParsedResult);
+            } catch (e) {
+                console.warn('Error updating active visualization:', e);
+            }
         }
         if (vscode) {
             vscode.postMessage({ command: 'ready' });
@@ -361,9 +363,10 @@ async function applyParsedUpdate(code, targetOp, targetLine) {
         }
         lastParsedResult = result;
 
-        for (const viz of getAllVisualizations()) {
+        const activeViz = getVisualization(currentMode);
+        if (activeViz) {
             try {
-                viz.update(result);
+                activeViz.update(result);
             } catch (e) {
                 console.warn('Error updating visualization:', e);
             }

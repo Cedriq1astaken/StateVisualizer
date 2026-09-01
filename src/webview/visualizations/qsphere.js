@@ -11,7 +11,6 @@ import {
     stepStatevectorTransition
 } from '../math/index.js';
 import {
-    renderStateVectorHistogram,
     getIsTransitioning,
     getCurrentAmplitudes,
     getCurrentQubits,
@@ -27,18 +26,19 @@ import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 let qsphereHoverInfo = null;
 
 function computeQsphereWithState(state, N) {
+    const points = computeQspherePoints(N);
     return {
-        points: computeQspherePoints(N),
-        hoverTargets: buildQSphereHoverTargets(state, N),
+        points,
+        hoverTargets: buildQSphereHoverTargets(state, N, points),
         state,
         N
     };
 }
 
-function buildQSphereHoverTargets(state, N) {
-    const points = computeQspherePoints(N);
+function buildQSphereHoverTargets(state, N, points = null) {
+    const pts = points || computeQspherePoints(N);
     const targets = [];
-    for (const point of points) {
+    for (const point of pts) {
         const amp = state[point.index] || { re: 0, im: 0 };
         const probability = amp.re * amp.re + amp.im * amp.im;
         const phase = Math.atan2(amp.im, amp.re);
@@ -114,6 +114,7 @@ function createHammingRings(N, lineMat) {
 let threeState = null;
 let lastResult = null;
 let _qsLabelData = [];
+let _qsLastLabelKey = null;
 
 function getQsphereHoverInfo() {
     const container = document.getElementById('container');
@@ -125,17 +126,33 @@ function getQsphereHoverInfo() {
 function rebuildQsphereLabels(points, N, state) {
     const qsLabelsDiv = document.getElementById('qs-labels');
     if (!qsLabelsDiv) return;
-    qsLabelsDiv.innerHTML = '';
-    _qsLabelData = [];
-    if (!points || !N) return;
+    if (!points || !N) {
+        qsLabelsDiv.innerHTML = '';
+        _qsLabelData = [];
+        _qsLastLabelKey = null;
+        return;
+    }
 
+    const visiblePoints = [];
     for (const pt of points) {
         if (state) {
             const amp = state[pt.index] || { re: 0, im: 0 };
             const probability = amp.re * amp.re + amp.im * amp.im;
             if (probability < 1e-5) continue;
         }
+        visiblePoints.push(pt);
+    }
 
+    const visibleKey = `${N}:${visiblePoints.map(p => p.index).join(',')}`;
+    if (visibleKey === _qsLastLabelKey) {
+        return;
+    }
+    _qsLastLabelKey = visibleKey;
+
+    qsLabelsDiv.innerHTML = '';
+    _qsLabelData = [];
+
+    for (const pt of visiblePoints) {
         const binaryStr = pt.index.toString(2).padStart(N, '0');
         const el = document.createElement('div');
         el.className = 'label qs-label';
@@ -162,36 +179,83 @@ function updateQsphereSceneWithAmplitudes(state, N, options = {}) {
     if (!threeState) return;
 
     const qs = computeQsphereWithState(state, N);
-
+    const points = qs.points;
     const group = threeState.qsphereGroup;
-    while (group.children.length > 0) {
-        const child = group.children[0];
-        group.remove(child);
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) child.material.dispose();
+
+    if (threeState._qsphereGroupN !== N || !threeState._qsphereNodes || threeState._qsphereNodes.length !== points.length) {
+        while (group.children.length > 0) {
+            const child = group.children[0];
+            group.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+            }
+        }
+
+        const rings = createHammingRings(N, threeState.lineMaterial);
+        group.add(rings);
+
+        const nodes = [];
+        const spokes = [];
+
+        for (const point of points) {
+            const node = createQnodeMesh(point.x, point.y, point.z, 1, 1, 1, 1, 1.0);
+            node.visible = false;
+            group.add(node);
+            nodes.push(node);
+
+            const spoke = createSpokeMesh([point.x, point.y, point.z], 0.015, 1, 1, 1, 1.0);
+            if (spoke) {
+                spoke.visible = false;
+                group.add(spoke);
+                spokes.push(spoke);
+            } else {
+                spokes.push(null);
+            }
+        }
+
+        threeState._qsphereGroupN = N;
+        threeState._qsphereNodes = nodes;
+        threeState._qsphereSpokes = spokes;
     }
 
-    const rings = createHammingRings(qs.N, threeState.lineMaterial);
-    group.add(rings);
+    const nodes = threeState._qsphereNodes;
+    const spokes = threeState._qsphereSpokes;
+    const focusedIndex = threeState._qsphereHoveredIndex;
 
-    const points = qs.points;
-
-    for (const point of points) {
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const node = nodes[i];
+        const spoke = spokes[i];
         const amp = state[point.index] || { re: 0, im: 0 };
         const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
+
+        if (probability < 1e-5) {
+            if (node) node.visible = false;
+            if (spoke) spoke.visible = false;
+            continue;
+        }
 
         const radius = 0.12 * Math.sqrt(probability);
         const phase = Math.atan2(amp.im, amp.re);
         const [r, g, b] = getPhaseToRgb(phase);
-        const focusedIndex = threeState._qsphereHoveredIndex;
         const alpha = (focusedIndex === null || focusedIndex === undefined || point.index === focusedIndex) ? 1.0 : 0.24;
 
-        const node = createQnodeMesh(point.x, point.y, point.z, radius, r, g, b, alpha);
-        group.add(node);
+        if (node) {
+            node.visible = true;
+            node.scale.set(radius, radius, radius);
+            node.material.color.setRGB(r, g, b);
+            node.material.opacity = alpha;
+            node.material.transparent = alpha < 1.0;
+        }
 
-        const spoke = createSpokeMesh([point.x, point.y, point.z], 0.015, r, g, b, alpha);
-        if (spoke) group.add(spoke);
+        if (spoke) {
+            spoke.visible = true;
+            spoke.material.color.setRGB(r, g, b);
+            spoke.material.opacity = alpha;
+            spoke.material.transparent = alpha < 1.0;
+        }
     }
 
     threeState._qsphereData = qs;
@@ -491,7 +555,6 @@ const qsphereVisualization = {
         if (!result) return;
         lastResult = result;
         const { state, N } = getQsphereState(result);
-        renderStateVectorHistogram(result);
         updateQsphereSceneWithAmplitudes(state, N, options);
     },
 

@@ -76,24 +76,33 @@ function hammingWeight(n) {
 
 function computeQspherePoints(N) {
     const size = 2 ** N;
-    const byWeight = Array.from({ length: N + 1 }, () => []);
-    for (let k = 0; k < size; k++) byWeight[hammingWeight(k)].push(k);
-
-    return Array.from({ length: size }, (_, k) => {
+    const groupSizes = new Array(N + 1).fill(0);
+    const weights = new Array(size);
+    for (let k = 0; k < size; k++) {
         const w = hammingWeight(k);
-        const group = byWeight[w];
-        const M = group.length;
-        const j = group.indexOf(k);
+        weights[k] = w;
+        groupSizes[w]++;
+    }
+
+    const runningCount = new Array(N + 1).fill(0);
+    const points = new Array(size);
+
+    for (let k = 0; k < size; k++) {
+        const w = weights[k];
+        const M = groupSizes[w];
+        const j = runningCount[w]++;
         const theta = N === 0 ? 0 : (Math.PI * w) / N;
         const phi = M === 1 ? 0 : (2 * Math.PI * j) / M;
-        return {
+        points[k] = {
             index: k,
             x: Math.sin(theta) * Math.cos(phi),
             y: Math.cos(theta),
             z: Math.sin(theta) * Math.sin(phi),
             w
         };
-    });
+    }
+
+    return points;
 }
 
 function getPhaseToRgb(phase) {
