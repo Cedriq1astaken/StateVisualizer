@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>StateVisualizer</title>
 
+    <link rel="stylesheet" href="dist/katex/katex.min.css">
     <link rel="stylesheet" href="styles.css">
 
     <script defer src="dist/qsharpRuntime.bundle.js"></script>
@@ -36,17 +37,23 @@
         <div id="statevector-chart-wrapper">
             <canvas id="statevector-canvas"></canvas>
         </div>
-        <div id="statevector-phase-legend" class="phase-horizontal-legend" aria-label="Statevector phase color legend">
-            <div class="phase-label phase-title">Phase</div>
-            <div class="phase-horizontal-body">
-                <canvas class="phase-horizontal-bar-canvas" width="220" height="10"></canvas>
-                <div class="phase-horizontal-ticks">
-                    <span class="phase-label">0</span>
-                    <span class="phase-label">π/2</span>
-                    <span class="phase-label">π</span>
-                    <span class="phase-label">3π/2</span>
-                    <span class="phase-label">2π</span>
+        <div id="statevector-bottom-bar" class="statevector-bottom-bar">
+            <div id="statevector-phase-legend" class="phase-horizontal-legend" aria-label="Statevector phase color legend">
+                <div class="phase-label phase-title">Phase</div>
+                <div class="phase-horizontal-body">
+                    <canvas class="phase-horizontal-bar-canvas" width="220" height="10"></canvas>
+                    <div class="phase-horizontal-ticks">
+                        <span class="phase-label">0</span>
+                        <span class="phase-label">π/2</span>
+                        <span class="phase-label">π</span>
+                        <span class="phase-label">3π/2</span>
+                        <span class="phase-label">2π</span>
+                    </div>
                 </div>
+            </div>
+            <div class="statevector-mode-toggle" role="group" aria-label="Statevector amplitude/probability mode">
+                <button type="button" class="statevector-toggle-btn active" data-statevector-mode="amplitude">Amplitude</button>
+                <button type="button" class="statevector-toggle-btn" data-statevector-mode="probability">Probability</button>
             </div>
         </div>
     </div>
@@ -125,14 +132,33 @@
         <div id="qubit-column"></div>
     </div>
 
-    <div id="footer-actions">
-        <button id="export-btn" class="action-btn" type="button" title="Export visualization as PNG and SVG">
-            <svg class="action-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M8 2V10M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-                <path d="M2 11V13C2 13.5523 2.44772 14 3 14H13C13.5523 14 14 13.5523 14 13V11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-            </svg>
-            <span>Export</span>
-        </button>
+    <div id="footer-container">
+        <div id="latex-container" class="latex-container" aria-label="Quantum state mathematical formula">
+            <div class="latex-content-wrapper">
+                <span class="latex-formula-label">State:</span>
+                <div id="latex-formula" class="latex-formula">|\psi\rangle = |0\rangle</div>
+            </div>
+            <button id="copy-latex-btn" class="action-btn copy-latex-btn" type="button" title="Copy state as LaTeX" aria-label="Copy LaTeX">
+                <svg class="action-icon copy-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M5.5 3.5H11.5C12.0523 3.5 12.5 3.94772 12.5 4.5V12.5C12.5 13.0523 12.0523 13.5 11.5 13.5H5.5C4.94772 13.5 4.5 13.0523 4.5 12.5V4.5C4.5 3.94772 4.94772 3.5 5.5 3.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M3.5 10.5H2.5C1.94772 10.5 1.5 10.0523 1.5 9.5V2.5C1.5 1.94772 1.94772 1.5 2.5 1.5H9.5C10.0523 1.5 10.5 1.94772 10.5 2.5V3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </button>
+        </div>
+
+        <div id="footer-actions">
+            <button id="live-btn" class="action-btn live-btn active" type="button" title="Live updates active (click to pause)" aria-pressed="true">
+                <span class="live-dot"></span>
+                <span>Live</span>
+            </button>
+            <button id="export-btn" class="action-btn" type="button" title="Export visualization as PNG and SVG">
+                <svg class="action-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8 2V10M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M2 11V13C2 13.5523 2.44772 14 3 14H13C13.5523 14 14 13.5523 14 13V11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <span>Export</span>
+            </button>
+        </div>
     </div>
 </body>
 

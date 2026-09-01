@@ -51,4 +51,8 @@ await build({
     }
 });
 
+const katexSource = path.join(packageRoot, 'node_modules', 'katex', 'dist');
+const katexTarget = path.join(distDirectory, 'katex');
+
 await cp(wasmSource, wasmTarget);
+await cp(katexSource, katexTarget, { recursive: true });

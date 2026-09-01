@@ -17,6 +17,7 @@ let statevectorCanvas = null;
 let statevectorStats = null;
 let statevectorChartWrapper = null;
 let statevectorHoverInfo = null;
+let statevectorToggleBtns = [];
 
 let statevectorBarData = [];
 let currentAmplitudes = [];
@@ -27,6 +28,7 @@ let isTransitioning = false;
 let hoveredStateIndex = null;
 let isInitialized = false;
 let lastResult = null;
+let statevectorMode = 'amplitude'; // 'amplitude' | 'probability'
 
 export function computeStatevectorLayout(numStates, wrapperWidth = 800) {
     const paddingLeft = 52;
@@ -72,11 +74,53 @@ function initStatevectorElements(elements = {}) {
     statevectorCanvas = elements.canvas || document.getElementById('statevector-canvas');
     statevectorStats = elements.stats || document.getElementById('statevector-stats');
     statevectorChartWrapper = elements.chartWrapper || document.getElementById('statevector-chart-wrapper');
+    statevectorToggleBtns = Array.from(document.querySelectorAll('.statevector-toggle-btn'));
 
     if (!isInitialized && statevectorCanvas) {
         setupStatevectorEvents();
+        setupToggleEvents();
         isInitialized = true;
     }
+}
+
+function setupToggleEvents() {
+    for (const btn of statevectorToggleBtns) {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.statevectorMode;
+            if (mode && mode !== statevectorMode) {
+                setStatevectorMode(mode);
+            }
+        });
+    }
+}
+
+function setStatevectorMode(mode) {
+    if (mode !== 'amplitude' && mode !== 'probability') return;
+    statevectorMode = mode;
+
+    if (statevectorToggleBtns) {
+        for (const btn of statevectorToggleBtns) {
+            btn.classList.toggle('active', btn.dataset.statevectorMode === mode);
+        }
+    }
+
+    if (typeof document !== 'undefined') {
+        const phaseLegend = document.getElementById('statevector-phase-legend');
+        if (phaseLegend) {
+            phaseLegend.style.visibility = mode === 'probability' ? 'hidden' : 'visible';
+            phaseLegend.style.opacity = mode === 'probability' ? '0' : '1';
+        }
+    }
+
+    if (currentAmplitudes.length > 0) {
+        drawStateVectorHistogramWithAmplitudes(currentAmplitudes, currentQubits);
+    } else if (lastResult) {
+        renderStateVectorHistogram(lastResult);
+    }
+}
+
+function getStatevectorMode() {
+    return statevectorMode;
 }
 
 function getStatevectorHoverInfo() {
@@ -260,10 +304,17 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         const phase = Math.atan2(amp.im, amp.re);
         const [r, g, b] = getPhaseToRgb(phase);
 
+        const val = statevectorMode === 'probability' ? probability : magnitude;
+        const scale = plotHeight;
         const barX = paddingLeft + i * step + (step - barWidth) / 2;
-        const barHeight = Math.max(0, Math.min(plotHeight, magnitude * plotHeight));
+        const barHeight = Math.max(0, Math.min(plotHeight, Math.max(val * scale, 0.001)));
         const barY = paddingTop + plotHeight - barHeight;
         const isHovered = hoveredStateIndex === i;
+
+        const uniformColor = 'rgb(56, 189, 248)';
+        const barColor = statevectorMode === 'probability'
+            ? uniformColor
+            : `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 
         statevectorBarData.push({
             index: i,
@@ -272,7 +323,7 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
             magnitude,
             probability,
             phase,
-            color: `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`,
+            color: barColor,
             x: barX,
             y: barY,
             width: barWidth,
@@ -283,9 +334,11 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         // Draw Bar
         if (barHeight > 1) {
             ctx.save();
-            ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+            ctx.fillStyle = barColor;
             if (isHovered) {
-                ctx.shadowColor = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.6)`;
+                ctx.shadowColor = statevectorMode === 'probability'
+                    ? 'rgba(56, 189, 248, 0.6)'
+                    : `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.6)`;
                 ctx.shadowBlur = 8;
             }
 
@@ -310,14 +363,14 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
             ctx.fillRect(barX, paddingTop + plotHeight - 1.5, barWidth, 1.5);
         }
 
-        // Amplitude value label above bar
-        if (magnitude >= 0.05) {
+        // Value label above bar
+        if (val >= 0.05) {
             ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(255, 255, 255, 0.95)';
             ctx.font = 'bold 10px system-ui, -apple-system, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             const labelY = Math.max(paddingTop - 2, barY - 6);
-            ctx.fillText(magnitude.toFixed(2), barX + barWidth / 2, labelY);
+            ctx.fillText(val.toFixed(2), barX + barWidth / 2, labelY);
         }
 
         // Basis state label below X-axis
@@ -377,131 +430,13 @@ function getCurrentQubits() {
     return currentQubits;
 }
 
-/*
-function generateStatevectorSvg(result = null) {
-    let amplitudes = currentAmplitudes;
-    let N = currentQubits;
-
-    if (result) {
-        const stateObj = getQsphereState(result);
-        amplitudes = stateObj.state;
-        N = stateObj.N;
-    } else if (amplitudes.length === 0 && lastResult) {
-        const stateObj = getQsphereState(lastResult);
-        amplitudes = stateObj.state;
-        N = stateObj.N;
-    }
-    const numStates = 2 ** N;
-
-    const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
-    const layout = computeStatevectorLayout(numStates, wrapperWidth);
-    const {
-        paddingLeft,
-        paddingRight,
-        paddingTop,
-        plotHeight,
-        chartHeight,
-        totalWidth,
-        totalHeight,
-        step,
-        barWidth,
-        yTicks
-    } = layout;
-
-    let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalWidth} ${totalHeight}" width="${totalWidth}" height="${totalHeight}">\n` +
-        `  <defs>\n` +
-        generatePhaseGradientSvgDef('phaseGradient', 'horizontal') +
-        `    <style>\n` +
-        `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
-        `    </style>\n` +
-        `  </defs>\n`;
-
-    // Y-Axis grid lines & ticks (> 0.0)
-    for (const tick of yTicks) {
-        const y = paddingTop + (1.0 - tick) * plotHeight;
-        svg += `  <text x="${paddingLeft - 8}" y="${y + 4}" fill="rgba(255, 255, 255, 0.85)" font-size="11" font-weight="bold" text-anchor="end">${tick.toFixed(2)}</text>\n`;
-        if (tick > 0.0) {
-            svg += `  <line x1="${paddingLeft}" y1="${y}" x2="${totalWidth - paddingRight}" y2="${y}" stroke="rgba(255, 255, 255, 0.20)" stroke-width="1" stroke-dasharray="4,4"/>\n`;
-        }
-    }
-
-    if (numStates === 0 || N === 0) {
-        const baseY = paddingTop + plotHeight;
-        svg += `  <line x1="${paddingLeft}" y1="${baseY}" x2="${totalWidth - paddingRight}" y2="${baseY}" stroke="rgba(255, 255, 255, 0.65)" stroke-width="1.5"/>\n`;
-        svg += `  <text x="${totalWidth / 2}" y="${paddingTop + plotHeight / 2}" fill="rgba(255, 255, 255, 0.75)" font-size="13" font-weight="bold" text-anchor="middle">No quantum state declared.</text>\n` +
-            `</svg>`;
-        return svg;
-    }
-
-    // Bars
-    for (let i = 0; i < numStates; i++) {
-        const amp = amplitudes[i] || { re: 0, im: 0 };
-        const magnitude = Math.sqrt(amp.re * amp.re + amp.im * amp.im);
-        const phase = Math.atan2(amp.im, amp.re);
-        const [r, g, b] = getPhaseToRgb(phase);
-        const color = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
-
-        const barX = paddingLeft + i * step + (step - barWidth) / 2;
-        const barHeight = Math.max(0, Math.min(plotHeight, magnitude * plotHeight));
-        const barY = paddingTop + plotHeight - barHeight;
-        const centerX = barX + barWidth / 2;
-
-        if (barHeight > 1) {
-            const radius = Math.min(3, barWidth / 2, barHeight / 2);
-            if (radius > 0) {
-                // Top-rounded corners, flat base
-                svg += `  <path d="M ${barX.toFixed(2)},${(barY + barHeight).toFixed(2)} v ${(-(barHeight - radius)).toFixed(2)} a ${radius.toFixed(2)},${radius.toFixed(2)} 0 0 1 ${radius.toFixed(2)},${(-radius).toFixed(2)} h ${(barWidth - 2 * radius).toFixed(2)} a ${radius.toFixed(2)},${radius.toFixed(2)} 0 0 1 ${radius.toFixed(2)},${radius.toFixed(2)} v ${(barHeight - radius).toFixed(2)} Z" fill="${color}"/>\n`;
-            } else {
-                svg += `  <rect x="${barX.toFixed(2)}" y="${barY.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${barHeight.toFixed(2)}" fill="${color}"/>\n`;
-            }
-        } else {
-            svg += `  <rect x="${barX.toFixed(2)}" y="${(paddingTop + plotHeight - 1.5).toFixed(2)}" width="${barWidth.toFixed(2)}" height="1.5" fill="rgba(255, 255, 255, 0.35)"/>\n`;
-        }
-
-        if (magnitude >= 0.05) {
-            const labelY = Math.max(paddingTop - 2, barY - 4);
-            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="rgba(255, 255, 255, 0.95)" font-size="10" font-weight="bold" text-anchor="middle">${magnitude.toFixed(2)}</text>\n`;
-        }
-
-        const labelText = formatBasisState(i, N);
-        const labelY = paddingTop + plotHeight + 18;
-        if (step < 32 && numStates > 8) {
-            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="end" transform="rotate(-45, ${centerX.toFixed(2)}, ${labelY.toFixed(2)})">${labelText}</text>\n`;
-        } else {
-            svg += `  <text x="${centerX.toFixed(2)}" y="${labelY.toFixed(2)}" fill="#ffffff" font-size="12" font-weight="bold" text-anchor="middle">${labelText}</text>\n`;
-        }
-    }
-
-    // X-Axis baseline on top of (over) the columns
-    const baseY = paddingTop + plotHeight;
-    svg += `  <line x1="${paddingLeft}" y1="${baseY}" x2="${totalWidth - paddingRight}" y2="${baseY}" stroke="rgba(255, 255, 255, 0.65)" stroke-width="1.5"/>\n`;
-
-    // Phase horizontal legend at the bottom
-    const legendWidth = 220;
-    const legendBarHeight = 10;
-    const legendX = (totalWidth - legendWidth) / 2;
-    const legendY = chartHeight + 18;
-
-    svg += generatePhaseLegendSvg({
-        x: legendX,
-        y: legendY,
-        width: legendWidth,
-        height: legendBarHeight,
-        orientation: 'horizontal',
-        gradientId: 'phaseGradient',
-        titleX: totalWidth / 2,
-        titleY: chartHeight + 8
-    });
-
-    svg += `</svg>`;
-    return svg;
-}
-*/
-
 function generateStatevectorPng() {
     initStatevectorElements();
     if (!statevectorCanvas) return '';
+
+    if (statevectorMode === 'probability') {
+        return statevectorCanvas.toDataURL('image/png');
+    }
 
     const dpr = window.devicePixelRatio || 1;
     const chartW = statevectorCanvas.width;
@@ -601,12 +536,10 @@ const statevectorVisualization = {
     },
 
     async export() {
-        // const svgContent = generateStatevectorSvg();
         const pngDataUrl = generateStatevectorPng();
         return {
             filenamePrefix: 'statevector',
             pngDataUrl
-            // svgContent
         };
     }
 };
@@ -627,6 +560,7 @@ export {
     formatPhasePi,
     getQsphereState,
     getPhaseToRgb,
-    // generateStatevectorSvg,
+    setStatevectorMode,
+    getStatevectorMode,
     generateStatevectorPng
 };

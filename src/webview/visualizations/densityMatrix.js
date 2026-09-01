@@ -379,6 +379,16 @@ function handle3DMouseMove(canvas, scene, camera, raycaster, mouse, isReal, even
     const intersects = raycaster.intersectObjects(scene.children, true);
 
     for (const hit of intersects) {
+        if (hit.object?.userData?.isInstancedBars) {
+            const numStates = hit.object.userData.numStates;
+            const instanceId = hit.instanceId;
+            if (instanceId !== undefined && instanceId !== null && instanceId >= 0) {
+                const row = Math.floor(instanceId / numStates);
+                const col = instanceId % numStates;
+                showTooltipForCell(row, col, event);
+                return;
+            }
+        }
         let obj = hit.object;
         while (obj && !obj.userData?.isBar && obj.parent) {
             obj = obj.parent;
@@ -474,9 +484,15 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
         color: 0x1f2438,
         transparent: true,
         opacity: 0.55,
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1
     });
-    gridGroup.add(new THREE.Mesh(baseGeo, baseMat));
+    const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+    baseMesh.renderOrder = 0;
+    gridGroup.add(baseMesh);
 
     const gridLines = [];
     for (let i = 0; i <= numStates; i++) {
@@ -486,8 +502,15 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
     }
     const gridLineGeo = new THREE.BufferGeometry();
     gridLineGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridLines, 3));
-    const gridLineMat = new THREE.LineBasicMaterial({ color: 0x4a5568, transparent: true, opacity: 0.5 });
-    gridGroup.add(new THREE.LineSegments(gridLineGeo, gridLineMat));
+    const gridLineMat = new THREE.LineBasicMaterial({
+        color: 0x4a5568,
+        transparent: true,
+        opacity: 0.5,
+        depthWrite: false
+    });
+    const gridLineMesh = new THREE.LineSegments(gridLineGeo, gridLineMat);
+    gridLineMesh.renderOrder = 1;
+    gridGroup.add(gridLineMesh);
 
     const borderLines = [
         -halfGrid, -maxHeight, -halfGrid, -halfGrid, maxHeight, -halfGrid,
@@ -496,11 +519,31 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
     ];
     const borderGeo = new THREE.BufferGeometry();
     borderGeo.setAttribute('position', new THREE.Float32BufferAttribute(borderLines, 3));
-    const borderMat = new THREE.LineBasicMaterial({ color: 0x718096, transparent: true, opacity: 0.6 });
-    gridGroup.add(new THREE.LineSegments(borderGeo, borderMat));
+    const borderMat = new THREE.LineBasicMaterial({
+        color: 0x718096,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false
+    });
+    const borderMesh = new THREE.LineSegments(borderGeo, borderMat);
+    borderMesh.renderOrder = 1;
+    gridGroup.add(borderMesh);
+
+    const totalInstances = numStates * numStates;
+    const unitBoxGeo = new THREE.BoxGeometry(1, 1, 1);
+    const instancedMat = new THREE.MeshLambertMaterial({
+        color: 0xffffff
+    });
+    const instancedMesh = new THREE.InstancedMesh(unitBoxGeo, instancedMat, totalInstances);
+    instancedMesh.userData = { isInstancedBars: true, numStates };
+    instancedMesh.renderOrder = 2;
+
+    const dummy = new THREE.Object3D();
+    const tempColor = new THREE.Color();
 
     for (let i = 0; i < numStates; i++) {
         for (let j = 0; j < numStates; j++) {
+            const idx = i * numStates + j;
             const cell = matrix[i]?.[j] || { re: 0, im: 0 };
             const val = isReal ? cell.re : cell.im;
             const mag = Math.abs(val);
@@ -509,35 +552,32 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
             const z = -halfGrid + i * spacing + spacing / 2;
 
             if (mag < 1e-4) {
-                const padGeo = new THREE.BoxGeometry(barSize, 0.02, barSize);
-                const padMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
-                const pad = new THREE.Mesh(padGeo, padMat);
-                pad.position.set(x, 0.01, z);
-                pad.userData = { isBar: true, row: i, col: j, val };
-                barGroup.add(pad);
-                continue;
+                dummy.position.set(x, 0.01, z);
+                dummy.scale.set(barSize, 0.02, barSize);
+                dummy.updateMatrix();
+                instancedMesh.setMatrixAt(idx, dummy.matrix);
+                tempColor.setRGB(1, 1, 1);
+                instancedMesh.setColorAt(idx, tempColor);
+            } else {
+                const h = Math.max(0.04, mag * maxHeight);
+                const centerY = val >= 0 ? h / 2 : -h / 2;
+                dummy.position.set(x, centerY, z);
+                dummy.scale.set(barSize, h, barSize);
+                dummy.updateMatrix();
+                instancedMesh.setMatrixAt(idx, dummy.matrix);
+
+                const [r, g, b] = getBwrColorRgb(val);
+                tempColor.setRGB(r / 255, g / 255, b / 255);
+                instancedMesh.setColorAt(idx, tempColor);
             }
-
-            const h = Math.max(0.04, mag * maxHeight);
-            const centerY = val >= 0 ? h / 2 : -h / 2;
-
-            const boxGeo = new THREE.BoxGeometry(barSize, h, barSize);
-            const [r, g, b] = getBwrColorRgb(val);
-            const boxMat = new THREE.MeshLambertMaterial({
-                color: new THREE.Color(r / 255, g / 255, b / 255)
-            });
-            const bar = new THREE.Mesh(boxGeo, boxMat);
-            bar.position.set(x, centerY, z);
-            bar.userData = { isBar: true, row: i, col: j, val };
-
-            const edgeGeo = new THREE.EdgesGeometry(boxGeo);
-            const edgeMat = new THREE.LineBasicMaterial({ color: 0x1a202c, linewidth: 1 });
-            const edges = new THREE.LineSegments(edgeGeo, edgeMat);
-            bar.add(edges);
-
-            barGroup.add(bar);
         }
     }
+
+    instancedMesh.instanceMatrix.needsUpdate = true;
+    if (instancedMesh.instanceColor) {
+        instancedMesh.instanceColor.needsUpdate = true;
+    }
+    barGroup.add(instancedMesh);
 
     if (labelsDiv) {
         for (let j = 0; j < numStates; j++) {
@@ -656,18 +696,45 @@ function drawHeatmapToContext(ctx, options) {
             const val = options.isReal ? cell.re : cell.im;
             ctx.fillStyle = getBwrColor(val);
             ctx.fillRect(cellX, cellY, cellSize, cellSize);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-            ctx.strokeRect(cellX, cellY, cellSize, cellSize);
-            if (hoveredCell && hoveredCell.panel === (options.isReal ? 'real' : 'imag') && hoveredCell.row === i && hoveredCell.col === j) {
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(cellX + 1, cellY + 1, cellSize - 2, cellSize - 2);
-            }
         }
     }
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(startX, startY, gridSize, gridSize);
+
+    // Internal grid lines between cells (contrasting dark tone for clear visibility on light/white cells)
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let k = 1; k < numStates; k++) {
+        const x = Math.floor(startX + k * cellSize) + 0.5;
+        ctx.moveTo(x, startY);
+        ctx.lineTo(x, startY + gridSize);
+
+        const y = Math.floor(startY + k * cellSize) + 0.5;
+        ctx.moveTo(startX, y);
+        ctx.lineTo(startX + gridSize, y);
+    }
+    ctx.stroke();
+
+    // Outer border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.40)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(startX + 0.5, startY + 0.5, gridSize, gridSize);
+
+    // Hover cell highlight with high contrast
+    if (hoveredCell && hoveredCell.panel === (options.isReal ? 'real' : 'imag')) {
+        const { row, col } = hoveredCell;
+        if (row >= 0 && row < numStates && col >= 0 && col < numStates) {
+            const cellX = startX + col * cellSize;
+            const cellY = startY + row * cellSize;
+            ctx.save();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cellX + 0.5, cellY + 0.5, cellSize - 1, cellSize - 1);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(cellX + 0.5, cellY + 0.5, cellSize - 1, cellSize - 1);
+            ctx.restore();
+        }
+    }
     ctx.restore();
 }
 

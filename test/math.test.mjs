@@ -24,7 +24,9 @@ import {
     formatPhasePi,
     parseAmplitude,
     isTrivialState,
-    stepStatevectorTransition
+    stepStatevectorTransition,
+    formatQuantumStateKaTeX,
+    stateToKaTeX
 } from '../src/webview/math/index.js';
 
 describe('Math Module - Vectors, Matrices, and Geometry', () => {
@@ -149,4 +151,59 @@ describe('Quantum Math Module - States, Bloch, Hamming, and Phase', () => {
         assert.strictEqual(step.isTransitioning, false);
         assert.strictEqual(step.currentAmplitudes[0].re, 1);
     });
+
+    test('formatQuantumStateKaTeX formats basis states, signs, and superpositions', () => {
+        // Ground states
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 1, im: 0 }, { re: 0, im: 0 }]), '|0\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 1, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }]), '|00\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX([], 3), '|000\\rangle');
+
+        // Single basis states with sign / phase
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 0, im: 0 }, { re: 1, im: 0 }]), '|1\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 0, im: 0 }, { re: -1, im: 0 }]), '- |1\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 0, im: 1 }, { re: 0, im: 0 }]), 'i|0\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX([{ re: 0, im: 0 }, { re: 0, im: -1 }]), '- i|1\\rangle');
+
+        // Bell state (|00⟩ + |11⟩) / √2
+        const bellAmps = [{ re: Math.SQRT1_2, im: 0 }, { re: 0, im: 0 }, { re: 0, im: 0 }, { re: Math.SQRT1_2, im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(bellAmps), '\\frac{1}{\\sqrt{2}}|00\\rangle + \\frac{1}{\\sqrt{2}}|11\\rangle');
+
+        // Minus state (|0⟩ - |1⟩) / √2
+        const minusAmps = [{ re: Math.SQRT1_2, im: 0 }, { re: -Math.SQRT1_2, im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(minusAmps), '\\frac{1}{\\sqrt{2}}|0\\rangle - \\frac{1}{\\sqrt{2}}|1\\rangle');
+
+        // Plus-i state (|0⟩ + i|1⟩) / √2
+        const plusIAmps = [{ re: Math.SQRT1_2, im: 0 }, { re: 0, im: Math.SQRT1_2 }];
+        assert.strictEqual(formatQuantumStateKaTeX(plusIAmps), '\\frac{1}{\\sqrt{2}}|0\\rangle + \\frac{i}{\\sqrt{2}}|1\\rangle');
+
+        // Minus-i state (|0⟩ - i|1⟩) / √2
+        const minusIAmps = [{ re: Math.SQRT1_2, im: 0 }, { re: 0, im: -Math.SQRT1_2 }];
+        assert.strictEqual(formatQuantumStateKaTeX(minusIAmps), '\\frac{1}{\\sqrt{2}}|0\\rangle - \\frac{i}{\\sqrt{2}}|1\\rangle');
+
+        // Uniform 2-qubit superposition (|00⟩ + |01⟩ + |10⟩ + |11⟩) / 2
+        const uniform2Q = [{ re: 0.5, im: 0 }, { re: 0.5, im: 0 }, { re: 0.5, im: 0 }, { re: 0.5, im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(uniform2Q), '\\frac{1}{2}|00\\rangle + \\frac{1}{2}|01\\rangle + \\frac{1}{2}|10\\rangle + \\frac{1}{2}|11\\rangle');
+
+        // Complex coefficients (symbolic fractions vs general decimals)
+        const complexHalfAmps = [{ re: 0.5, im: 0.5 }, { re: 0.5, im: -0.5 }];
+        assert.strictEqual(formatQuantumStateKaTeX(complexHalfAmps), '\\left(\\frac{1}{2} + \\frac{1}{2}i\\right)|0\\rangle + \\left(\\frac{1}{2} - \\frac{1}{2}i\\right)|1\\rangle');
+
+        const complexDecAmps = [{ re: 0.6, im: 0.8 }, { re: 0.6, im: -0.8 }];
+        assert.strictEqual(formatQuantumStateKaTeX(complexDecAmps), '\\left(0.6 + 0.8i\\right)|0\\rangle + \\left(0.6 - 0.8i\\right)|1\\rangle');
+
+        // Snapshot and result object inputs
+        const snapshot = { qubits: 2, amplitudes: bellAmps };
+        assert.strictEqual(formatQuantumStateKaTeX(snapshot), '\\frac{1}{\\sqrt{2}}|00\\rangle + \\frac{1}{\\sqrt{2}}|11\\rangle');
+
+        const resultObj = { states: [snapshot], qubitsDeclared: 2 };
+        assert.strictEqual(formatQuantumStateKaTeX(resultObj), '\\frac{1}{\\sqrt{2}}|00\\rangle + \\frac{1}{\\sqrt{2}}|11\\rangle');
+
+        // Options: symbolic false & includeStateSymbol
+        assert.strictEqual(formatQuantumStateKaTeX(minusAmps, { symbolic: false }), '0.7071|0\\rangle - 0.7071|1\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX(minusAmps, { includeStateSymbol: true }), '|\\psi\\rangle = \\frac{1}{\\sqrt{2}}|0\\rangle - \\frac{1}{\\sqrt{2}}|1\\rangle');
+
+        // Alias stateToKaTeX
+        assert.strictEqual(stateToKaTeX(bellAmps), formatQuantumStateKaTeX(bellAmps));
+    });
 });
+

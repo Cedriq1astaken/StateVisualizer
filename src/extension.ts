@@ -126,6 +126,13 @@ export function activate(context: vscode.ExtensionContext) {
                     vscode.window.showErrorMessage(`StateVisualizer export failed: ${String(err)}`);
                 }
             }
+
+            if (message.command === 'copyToClipboard') {
+                if (typeof message.text === 'string') {
+                    await vscode.env.clipboard.writeText(message.text);
+                    vscode.window.setStatusBarMessage('StateVisualizer: Copied quantum state LaTeX to clipboard', 2500);
+                }
+            }
         });
 
         postSource('init', codeContent, fileName);
@@ -322,6 +329,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
 
     const templatePath = path.join(extRoot, 'src', 'webview', 'index.html');
     const cssPath = path.join(extRoot, 'src', 'webview', 'styles.css');
+    const katexCssPath = path.join(extRoot, 'dist', 'katex', 'katex.min.css');
     const runtimePath = path.join(extRoot, 'dist', 'qsharpRuntime.bundle.js');
     const runtimeUiPath = path.join(extRoot, 'src', 'webview', 'runtime', 'qsharpRuntimeUi.js');
     const webviewBundlePath = path.join(extRoot, 'dist', 'webview.bundle.js');
@@ -329,11 +337,12 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const testQsPath = path.join(extRoot, 'samples', 'test.qs');
     const template = fs.readFileSync(templatePath, 'utf8');
     const uri = (filePath: string) => webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
-    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'unsafe-eval' 'wasm-unsafe-eval'; connect-src ${webview.cspSource};">`;
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} data:; script-src ${webview.cspSource} 'unsafe-eval' 'wasm-unsafe-eval'; connect-src ${webview.cspSource};">`;
 
     return template
         .replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n    ${csp}`)
         .replace('styles.css', uri(cssPath))
+        .replace('dist/katex/katex.min.css', uri(katexCssPath))
         .replace('dist/qsharpRuntime.bundle.js', uri(runtimePath))
         .replace('runtime/qsharpRuntimeUi.js', uri(runtimeUiPath))
         .replace('dist/webview.bundle.js', uri(webviewBundlePath))

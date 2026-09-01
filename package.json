@@ -24,7 +24,6 @@
     "README.md"
   ],
   "contributes": {
-
     "commands": [
       {
         "command": "qsphere.openVisualizer",
@@ -72,12 +71,10 @@
       ]
     }
   },
-
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "npm run bundle:webview && tsc -p ./",
     "bundle:webview": "node scripts/build-webview.mjs",
-
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile",
     "test": "node --test test/**/*.test.mjs"
@@ -89,6 +86,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "katex": "^0.18.5",
     "qsharp-lang": "^1.31.0",
     "three": "^0.170.0"
   }

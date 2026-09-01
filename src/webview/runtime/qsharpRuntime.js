@@ -141,7 +141,7 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
             if (step.id === StepResultId.Return) break;
         }
 
-        if (!hasTargetLine) {
+        if (!hasTargetLine || result.states.length === 0) {
             let captured = [];
             try {
                 captured = await debugService.captureQuantumState();

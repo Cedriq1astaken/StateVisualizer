@@ -176,6 +176,141 @@ function stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFact
     };
 }
 
+/**
+ * Converts a quantum state (amplitudes array, snapshot, or visualizer result) into a KaTeX / LaTeX string.
+ * @param {Array<{re: number, im: number}> | { amplitudes: Array, qubits?: number } | { states: Array }} stateInput
+ * @param {number | { qubits?: number, threshold?: number, precision?: number, symbolic?: boolean, includeStateSymbol?: boolean | string, ketPrefix?: string, ketSuffix?: string }} [options]
+ * @returns {string} KaTeX formatted quantum state string
+ */
+function formatQuantumStateKaTeX(stateInput, options = {}) {
+    const opts = typeof options === 'number' ? { qubits: options } : (options || {});
+    const threshold = typeof opts.threshold === 'number' ? opts.threshold : 1e-4;
+    const precision = typeof opts.precision === 'number' ? opts.precision : 4;
+    const symbolic = opts.symbolic !== false;
+    const ketPrefix = opts.ketPrefix || '|';
+    const ketSuffix = opts.ketSuffix || '\\rangle';
+
+    let amplitudes = [];
+    let N = opts.qubits;
+
+    if (Array.isArray(stateInput)) {
+        amplitudes = stateInput;
+    } else if (stateInput && Array.isArray(stateInput.amplitudes)) {
+        amplitudes = stateInput.amplitudes;
+        if (N === undefined && typeof stateInput.qubits === 'number') {
+            N = stateInput.qubits;
+        }
+    } else if (stateInput && (Array.isArray(stateInput.states) || typeof stateInput.qubitsDeclared === 'number')) {
+        const qstate = getQsphereState(stateInput);
+        amplitudes = qstate.state;
+        if (N === undefined) N = qstate.N;
+    }
+
+    if (!amplitudes || amplitudes.length === 0) {
+        const numQubits = typeof N === 'number' && N > 0 ? N : 1;
+        return `${ketPrefix}${'0'.repeat(numQubits)}${ketSuffix}`;
+    }
+
+    if (typeof N !== 'number' || N <= 0) {
+        N = Math.max(1, Math.round(Math.log2(amplitudes.length)));
+    }
+
+    const eps = 1e-4;
+
+    function formatMag(val) {
+        const absVal = Math.abs(val);
+        if (symbolic) {
+            if (Math.abs(absVal - 1) < eps) return '1';
+            if (Math.abs(absVal - Math.SQRT1_2) < eps) return '\\frac{1}{\\sqrt{2}}';
+            if (Math.abs(absVal - 0.5) < eps) return '\\frac{1}{2}';
+            if (Math.abs(absVal - Math.sqrt(3) / 2) < eps) return '\\frac{\\sqrt{3}}{2}';
+            if (Math.abs(absVal - 1 / Math.sqrt(3)) < eps) return '\\frac{1}{\\sqrt{3}}';
+            if (Math.abs(absVal - 0.5 * Math.SQRT1_2) < eps) return '\\frac{1}{2\\sqrt{2}}';
+        }
+        const rounded = Number(absVal.toFixed(precision));
+        return String(rounded);
+    }
+
+    function formatCoeff(re, im, isFirst) {
+        const isRealZero = Math.abs(re) < eps;
+        const isImagZero = Math.abs(im) < eps;
+
+        // Pure Real
+        if (isImagZero) {
+            const isOne = Math.abs(Math.abs(re) - 1) < eps;
+            const mag = formatMag(re);
+
+            if (re > 0) {
+                if (isOne) return isFirst ? '' : '+ ';
+                return isFirst ? `${mag}` : `+ ${mag}`;
+            } else {
+                if (isOne) return '- ';
+                return `- ${mag}`;
+            }
+        }
+
+        // Pure Imaginary
+        if (isRealZero) {
+            const isOne = Math.abs(Math.abs(im) - 1) < eps;
+            if (symbolic && Math.abs(Math.abs(im) - Math.SQRT1_2) < eps) {
+                const frac = '\\frac{i}{\\sqrt{2}}';
+                return im > 0 ? (isFirst ? frac : `+ ${frac}`) : `- ${frac}`;
+            }
+            if (symbolic && Math.abs(Math.abs(im) - 0.5) < eps) {
+                const frac = '\\frac{i}{2}';
+                return im > 0 ? (isFirst ? frac : `+ ${frac}`) : `- ${frac}`;
+            }
+
+            const mag = formatMag(im);
+            const imagStr = isOne ? 'i' : `${mag}i`;
+            return im > 0 ? (isFirst ? imagStr : `+ ${imagStr}`) : `- ${imagStr}`;
+        }
+
+        // Complex (both real and imaginary non-zero)
+        const reMag = formatMag(re);
+        const imMag = formatMag(im);
+        const rePart = re < 0 ? `-${reMag}` : `${reMag}`;
+        const imIsOne = Math.abs(Math.abs(im) - 1) < eps;
+        const imPart = im > 0
+            ? `+ ${imIsOne ? 'i' : imMag + 'i'}`
+            : `- ${imIsOne ? 'i' : imMag + 'i'}`;
+
+        const complexInner = `\\left(${rePart} ${imPart}\\right)`;
+        return isFirst ? complexInner : `+ ${complexInner}`;
+    }
+
+    const terms = [];
+
+    for (let i = 0; i < amplitudes.length; i++) {
+        const rawAmp = amplitudes[i];
+        const re = typeof rawAmp === 'number' ? rawAmp : (rawAmp?.re || 0);
+        const im = typeof rawAmp === 'number' ? 0 : (rawAmp?.im || 0);
+        const magSq = re * re + im * im;
+
+        if (magSq < threshold * threshold) continue;
+
+        const isFirst = terms.length === 0;
+        const ket = `${ketPrefix}${i.toString(2).padStart(N, '0')}${ketSuffix}`;
+        const coeffStr = formatCoeff(re, im, isFirst);
+
+        terms.push(`${coeffStr}${ket}`);
+    }
+
+    if (terms.length === 0) {
+        return `${ketPrefix}${'0'.repeat(N)}${ketSuffix}`;
+    }
+
+    const expr = terms.join(' ');
+    if (opts.includeStateSymbol) {
+        const sym = typeof opts.includeStateSymbol === 'string' ? opts.includeStateSymbol : '|\\psi\\rangle = ';
+        return `${sym}${expr}`;
+    }
+
+    return expr;
+}
+
+const stateToKaTeX = formatQuantumStateKaTeX;
+
 export {
     parseAmplitude,
     isTrivialState,
@@ -186,5 +321,7 @@ export {
     getPhaseToRgb,
     formatBasisState,
     formatPhasePi,
-    stepStatevectorTransition
+    stepStatevectorTransition,
+    formatQuantumStateKaTeX,
+    stateToKaTeX
 };

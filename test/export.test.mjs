@@ -158,3 +158,80 @@ describe('Phase Legend, Statevector, and Bloch Layout Helpers', () => {
     });
 });
 
+describe('Live Update Mode Controller', () => {
+    test('Live update is enabled by default and toggles correctly', async () => {
+        const { getIsLiveUpdate, setLiveUpdate } = await import('../src/webview/main.js');
+        assert.strictEqual(getIsLiveUpdate(), true, 'Live update should be enabled by default');
+
+        setLiveUpdate(false);
+        assert.strictEqual(getIsLiveUpdate(), false, 'Live update should be disabled when toggled off');
+
+        setLiveUpdate(true);
+        assert.strictEqual(getIsLiveUpdate(), true, 'Live update should be re-enabled when toggled on');
+    });
+
+    test('Auto deactivates live update when qubit count >= 5', async () => {
+        const { getIsLiveUpdate, setLiveUpdate, checkAutoDeactivateLive } = await import('../src/webview/main.js');
+
+        setLiveUpdate(true);
+        assert.strictEqual(getIsLiveUpdate(), true);
+
+        // 3 qubits declared: should remain live
+        checkAutoDeactivateLive({ qubitsDeclared: 3, states: [{ qubits: 3, amplitudes: [] }] });
+        assert.strictEqual(getIsLiveUpdate(), true, 'Live update should remain enabled for < 5 qubits');
+
+        // 4 qubits declared: should remain live
+        checkAutoDeactivateLive(4);
+        assert.strictEqual(getIsLiveUpdate(), true, 'Live update should remain enabled for 4 qubits');
+
+        // 5 qubits declared: should auto-deactivate
+        checkAutoDeactivateLive({ qubitsDeclared: 5, states: [{ qubits: 5, amplitudes: [] }] });
+        assert.strictEqual(getIsLiveUpdate(), false, 'Live update should auto deactivate for 5 qubits');
+
+        // Re-enable and test with number
+        setLiveUpdate(true);
+        checkAutoDeactivateLive(6);
+        assert.strictEqual(getIsLiveUpdate(), false, 'Live update should auto deactivate for 6 qubits');
+    });
+});
+
+describe('Statevector Amplitude / Probability Mode Toggle', () => {
+    test('setStatevectorMode and getStatevectorMode toggles between amplitude and probability', async () => {
+        const { setStatevectorMode, getStatevectorMode } = await import('../src/webview/visualizations/statevector.js');
+        assert.strictEqual(getStatevectorMode(), 'amplitude', 'Default statevector mode should be amplitude');
+
+        setStatevectorMode('probability');
+        assert.strictEqual(getStatevectorMode(), 'probability', 'Statevector mode should toggle to probability');
+
+        setStatevectorMode('amplitude');
+        assert.strictEqual(getStatevectorMode(), 'amplitude', 'Statevector mode should toggle back to amplitude');
+    });
+});
+
+describe('LaTeX Quantum State Display Controller', () => {
+    test('updateLatexDisplay and getCurrentLatexString formats current state with state symbol', async () => {
+        const { updateLatexDisplay, getCurrentLatexString } = await import('../src/webview/main.js');
+
+        const bellResult = {
+            states: [{
+                qubits: 2,
+                amplitudes: [
+                    { re: Math.SQRT1_2, im: 0 },
+                    { re: 0, im: 0 },
+                    { re: 0, im: 0 },
+                    { re: Math.SQRT1_2, im: 0 }
+                ]
+            }],
+            qubitsDeclared: 2
+        };
+
+        updateLatexDisplay(bellResult);
+        assert.strictEqual(
+            getCurrentLatexString(),
+            '|\\psi\\rangle = \\frac{1}{\\sqrt{2}}|00\\rangle + \\frac{1}{\\sqrt{2}}|11\\rangle'
+        );
+    });
+});
+
+
+
