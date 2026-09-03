@@ -18,11 +18,13 @@
  * @property {function(MouseEvent, HTMLCanvasElement, number[]): void} [updateHover] - Optional view-specific hover hit-testing
  * @property {function(): void} [clearHover] - Optional view-specific hover clearing
  * @property {function(Float32Array, number, number): void} [updateLabels] - Optional view-specific 3D label projection updater
+ * @property {function(SharedContext=): Promise<{ filenamePrefix: string, pngDataUrl: string, svgContent: string }>} [export] - Export visualization as PNG data URL and SVG content
  */
 
 import statevectorVisualization from './statevector.js';
 import blochVisualization from './bloch.js';
 import qsphereVisualization from './qsphere.js';
+import densityMatrixVisualization from './densityMatrix.js';
 
 /** @type {Map<string, VisualizationPlugin>} */
 const visualizations = new Map();
@@ -42,6 +44,7 @@ function registerVisualization(plugin) {
 registerVisualization(statevectorVisualization);
 registerVisualization(blochVisualization);
 registerVisualization(qsphereVisualization);
+registerVisualization(densityMatrixVisualization);
 
 /**
  * Retrieve a visualization plugin by its id.
@@ -67,7 +70,8 @@ export {
     getAllVisualizations,
     statevectorVisualization,
     blochVisualization,
-    qsphereVisualization
+    qsphereVisualization,
+    densityMatrixVisualization
 };
 
 export default {

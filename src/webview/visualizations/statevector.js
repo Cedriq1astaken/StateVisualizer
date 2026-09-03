@@ -1,62 +1,23 @@
-function getQsphereState(result) {
-    if (typeof computeQsphereState === 'function') {
-        return computeQsphereState(result);
-    }
-    if (typeof window !== 'undefined' && typeof window.computeQsphereState === 'function') {
-        return window.computeQsphereState(result);
-    }
-    const states = result?.states || [];
-    const latest = states.length > 0 ? states[states.length - 1] : null;
-    const N = latest?.qubits || result?.qubitsDeclared || 0;
-    const state = latest?.amplitudes || Array.from(
-        { length: 2 ** N },
-        () => ({ re: 0, im: 0 })
-    );
-    return { state, N };
-}
-
-function getPhaseToRgb(phase) {
-    if (typeof phaseToRgb === 'function') {
-        return phaseToRgb(phase);
-    }
-    if (typeof window !== 'undefined' && typeof window.phaseToRgb === 'function') {
-        return window.phaseToRgb(phase);
-    }
-    const deg = ((phase / (2 * Math.PI)) * 360 + 360) % 360;
-    const s = 0.68, l = 0.68;
-    const k = n => (n + deg / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-    return [f(0), f(8), f(4)];
-}
-
-function formatBasisState(index, qubits) {
-    return `|${index.toString(2).padStart(qubits, '0')}⟩`;
-}
-
-function formatPhasePi(phase) {
-    const twoPi = Math.PI * 2;
-    const normalized = ((phase % twoPi) + twoPi) % twoPi;
-    const units = normalized / Math.PI;
-    const known = [
-        [0, '0'],
-        [0.5, 'π/2'],
-        [1, 'π'],
-        [1.5, '3π/2'],
-        [2, '0']
-    ];
-
-    for (const [value, label] of known) {
-        if (Math.abs(units - value) < 0.03) return label;
-    }
-    return `${units.toFixed(2)}π`;
-}
+import {
+    getQsphereState,
+    getPhaseToRgb,
+    formatBasisState,
+    formatPhasePi,
+    stepStatevectorTransition
+} from '../math/index.js';
+import {
+    drawPhaseLegendToCanvas
+    // generatePhaseGradientSvgDef,
+    // generatePhaseLegendSvg
+} from '../render/phaseLegend.js';
+import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
 let statevectorContainer = null;
 let statevectorCanvas = null;
 let statevectorStats = null;
 let statevectorChartWrapper = null;
 let statevectorHoverInfo = null;
+let statevectorToggleBtns = [];
 
 let statevectorBarData = [];
 let currentAmplitudes = [];
@@ -67,26 +28,104 @@ let isTransitioning = false;
 let hoveredStateIndex = null;
 let isInitialized = false;
 let lastResult = null;
+let statevectorMode = 'amplitude'; // 'amplitude' | 'probability'
+
+export function computeStatevectorLayout(numStates, wrapperWidth = 800) {
+    const paddingLeft = 52;
+    const paddingRight = 20;
+    const paddingTop = 28;
+    const plotHeight = 210;
+    const paddingBottom = 42;
+    const legendHeight = 56;
+    const chartHeight = paddingTop + plotHeight + paddingBottom;
+    const totalHeight = chartHeight + legendHeight;
+
+    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
+    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
+    const minPlotWidth = numStates * (minBarWidth + barGap);
+    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
+    const plotWidth = totalWidth - paddingLeft - paddingRight;
+    const step = numStates > 0 ? plotWidth / numStates : 0;
+    const barWidth = numStates > 0 ? Math.max(14, Math.min(52, step - barGap)) : 0;
+
+    return {
+        paddingLeft,
+        paddingRight,
+        paddingTop,
+        paddingBottom,
+        plotHeight,
+        legendHeight,
+        chartHeight,
+        totalHeight,
+        minBarWidth,
+        barGap,
+        minPlotWidth,
+        totalWidth,
+        plotWidth,
+        step,
+        barWidth,
+        yTicks: [1.0, 0.75, 0.5, 0.25, 0.0]
+    };
+}
 
 function initStatevectorElements(elements = {}) {
+    if (typeof document === 'undefined') return;
     statevectorContainer = elements.container || document.getElementById('statevector-container');
     statevectorCanvas = elements.canvas || document.getElementById('statevector-canvas');
     statevectorStats = elements.stats || document.getElementById('statevector-stats');
     statevectorChartWrapper = elements.chartWrapper || document.getElementById('statevector-chart-wrapper');
+    statevectorToggleBtns = Array.from(document.querySelectorAll('.statevector-toggle-btn'));
 
     if (!isInitialized && statevectorCanvas) {
         setupStatevectorEvents();
+        setupToggleEvents();
         isInitialized = true;
     }
 }
 
-function getStatevectorHoverInfo() {
-    if (statevectorHoverInfo || !statevectorContainer) return statevectorHoverInfo;
+function setupToggleEvents() {
+    for (const btn of statevectorToggleBtns) {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.statevectorMode;
+            if (mode && mode !== statevectorMode) {
+                setStatevectorMode(mode);
+            }
+        });
+    }
+}
 
-    statevectorHoverInfo = document.createElement('div');
-    statevectorHoverInfo.className = 'statevector-hover-info';
-    statevectorHoverInfo.hidden = true;
-    statevectorContainer.appendChild(statevectorHoverInfo);
+function setStatevectorMode(mode) {
+    if (mode !== 'amplitude' && mode !== 'probability') return;
+    statevectorMode = mode;
+
+    if (statevectorToggleBtns) {
+        for (const btn of statevectorToggleBtns) {
+            btn.classList.toggle('active', btn.dataset.statevectorMode === mode);
+        }
+    }
+
+    if (typeof document !== 'undefined') {
+        const phaseLegend = document.getElementById('statevector-phase-legend');
+        if (phaseLegend) {
+            phaseLegend.style.visibility = mode === 'probability' ? 'hidden' : 'visible';
+            phaseLegend.style.opacity = mode === 'probability' ? '0' : '1';
+        }
+    }
+
+    if (currentAmplitudes.length > 0) {
+        drawStateVectorHistogramWithAmplitudes(currentAmplitudes, currentQubits);
+    } else if (lastResult) {
+        renderStateVectorHistogram(lastResult);
+    }
+}
+
+function getStatevectorMode() {
+    return statevectorMode;
+}
+
+function getStatevectorHoverInfo() {
+    if (!statevectorContainer) return null;
+    statevectorHoverInfo = getOrCreateHoverTooltip(statevectorContainer, 'statevector-hover-info', statevectorHoverInfo);
     return statevectorHoverInfo;
 }
 
@@ -119,9 +158,6 @@ function setupStatevectorEvents() {
         const hoverInfo = getStatevectorHoverInfo();
         if (hovered && hoverInfo && statevectorContainer) {
             const phaseDeg = (((hovered.phase * 180 / Math.PI) % 360) + 360) % 360;
-            const reSign = hovered.amp.im >= 0 ? '+' : '-';
-            const imAbs = Math.abs(hovered.amp.im);
-
             hoverInfo.innerHTML =
                 `<strong>${hovered.label}</strong><br>` +
                 `Amplitude: ${hovered.magnitude.toFixed(4)}<br>` +
@@ -194,55 +230,62 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
 
     const dpr = window.devicePixelRatio || 1;
     const wrapperWidth = (statevectorChartWrapper ? statevectorChartWrapper.clientWidth : 800) || 800;
-    const paddingLeft = 52;
-    const paddingRight = 20;
-    const paddingTop = 28;
-    const paddingBottom = 42;
-    const plotHeight = 210;
-    const totalHeight = paddingTop + plotHeight + paddingBottom;
+    const layout = computeStatevectorLayout(numStates, wrapperWidth);
+    const {
+        paddingLeft,
+        paddingRight,
+        paddingTop,
+        plotHeight,
+        chartHeight,
+        totalWidth,
+        step,
+        barWidth,
+        yTicks
+    } = layout;
 
-    const minBarWidth = numStates <= 8 ? 44 : (numStates <= 16 ? 30 : 20);
-    const barGap = numStates <= 8 ? 20 : (numStates <= 16 ? 12 : 8);
-    const minPlotWidth = numStates * (minBarWidth + barGap);
-    const totalWidth = Math.max(wrapperWidth, paddingLeft + paddingRight + minPlotWidth);
-    const plotWidth = totalWidth - paddingLeft - paddingRight;
-
-    if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(totalHeight * dpr)) {
+    if (statevectorCanvas.width !== Math.floor(totalWidth * dpr) || statevectorCanvas.height !== Math.floor(chartHeight * dpr)) {
         statevectorCanvas.width = Math.floor(totalWidth * dpr);
-        statevectorCanvas.height = Math.floor(totalHeight * dpr);
+        statevectorCanvas.height = Math.floor(chartHeight * dpr);
         statevectorCanvas.style.width = `${totalWidth}px`;
-        statevectorCanvas.style.height = `${totalHeight}px`;
+        statevectorCanvas.style.height = `${chartHeight}px`;
     }
 
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, totalWidth, totalHeight);
+    ctx.clearRect(0, 0, totalWidth, chartHeight);
 
     // Draw Y-Axis Grid Lines & Ticks (0.0 to 1.0)
-    const yTicks = [1.0, 0.75, 0.5, 0.25, 0.0];
     ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
 
     for (const tick of yTicks) {
         const y = paddingTop + (1.0 - tick) * plotHeight;
-
-        ctx.strokeStyle = tick === 0.0 ? 'rgba(255, 255, 255, 0.65)' : 'rgba(255, 255, 255, 0.20)';
-        ctx.lineWidth = tick === 0.0 ? 1.5 : 1;
-        ctx.setLineDash(tick === 0.0 ? [] : [4, 4]);
-
-
-        ctx.beginPath();
-        ctx.moveTo(paddingLeft, y);
-        ctx.lineTo(totalWidth - paddingRight, y);
-        ctx.stroke();
-
         ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.fillText(tick.toFixed(2), paddingLeft - 8, y);
+
+        if (tick > 0.0) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.20)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, y);
+            ctx.lineTo(totalWidth - paddingRight, y);
+            ctx.stroke();
+        }
     }
     ctx.setLineDash([]);
 
     if (numStates === 0 || N === 0) {
+        const baseY = paddingTop + plotHeight;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, baseY);
+        ctx.lineTo(totalWidth - paddingRight, baseY);
+        ctx.stroke();
+
         ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
         ctx.textAlign = 'center';
         ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
@@ -252,9 +295,6 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         return;
     }
 
-    // Calculate bar positions
-    const step = plotWidth / numStates;
-    const barWidth = Math.max(14, Math.min(52, step - barGap));
     statevectorBarData = [];
 
     for (let i = 0; i < numStates; i++) {
@@ -264,10 +304,17 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         const phase = Math.atan2(amp.im, amp.re);
         const [r, g, b] = getPhaseToRgb(phase);
 
+        const val = statevectorMode === 'probability' ? probability : magnitude;
+        const scale = plotHeight;
         const barX = paddingLeft + i * step + (step - barWidth) / 2;
-        const barHeight = Math.max(0, Math.min(plotHeight, magnitude * plotHeight));
+        const barHeight = Math.max(0, Math.min(plotHeight, Math.max(val * scale, 0.001)));
         const barY = paddingTop + plotHeight - barHeight;
         const isHovered = hoveredStateIndex === i;
+
+        const uniformColor = 'rgb(56, 189, 248)';
+        const barColor = statevectorMode === 'probability'
+            ? uniformColor
+            : `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
 
         statevectorBarData.push({
             index: i,
@@ -276,7 +323,7 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
             magnitude,
             probability,
             phase,
-            color: `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`,
+            color: barColor,
             x: barX,
             y: barY,
             width: barWidth,
@@ -287,9 +334,11 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         // Draw Bar
         if (barHeight > 1) {
             ctx.save();
-            ctx.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+            ctx.fillStyle = barColor;
             if (isHovered) {
-                ctx.shadowColor = `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.6)`;
+                ctx.shadowColor = statevectorMode === 'probability'
+                    ? 'rgba(56, 189, 248, 0.6)'
+                    : `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, 0.6)`;
                 ctx.shadowBlur = 8;
             }
 
@@ -314,14 +363,14 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
             ctx.fillRect(barX, paddingTop + plotHeight - 1.5, barWidth, 1.5);
         }
 
-        // Amplitude value label above bar
-        if (magnitude >= 0.05) {
+        // Value label above bar
+        if (val >= 0.05) {
             ctx.fillStyle = isHovered ? '#ffffff' : 'rgba(255, 255, 255, 0.95)';
             ctx.font = 'bold 10px system-ui, -apple-system, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'bottom';
             const labelY = Math.max(paddingTop - 2, barY - 6);
-            ctx.fillText(magnitude.toFixed(2), barX + barWidth / 2, labelY);
+            ctx.fillText(val.toFixed(2), barX + barWidth / 2, labelY);
         }
 
         // Basis state label below X-axis
@@ -344,54 +393,27 @@ function drawStateVectorHistogramWithAmplitudes(state, N) {
         }
     }
 
+    // Draw X-Axis baseline on top of (over) the columns
+    const baseY = paddingTop + plotHeight;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(paddingLeft, baseY);
+    ctx.lineTo(totalWidth - paddingRight, baseY);
+    ctx.stroke();
+
     ctx.restore();
 }
 
-function stepStatevectorTransition(lerpFactor = 0.25, threshold = 1e-4) {
+function stepStatevectorTransitionInternal(lerpFactor = 0.25, threshold = 1e-4) {
     if (!isTransitioning) {
         return { isTransitioning: false, currentAmplitudes, currentQubits };
     }
-
-    let anyDifference = false;
-    for (let i = 0; i < targetAmplitudes.length; i++) {
-        const curr = currentAmplitudes[i] || (currentAmplitudes[i] = { re: 0, im: 0 });
-        const target = targetAmplitudes[i] || { re: 0, im: 0 };
-
-        const currR = Math.sqrt(curr.re * curr.re + curr.im * curr.im);
-        const targetR = Math.sqrt(target.re * target.re + target.im * target.im);
-
-        const currTheta = Math.atan2(curr.im, curr.re);
-        const targetTheta = Math.atan2(target.im, target.re);
-
-        const diffR = targetR - currR;
-        let diffTheta = targetTheta - currTheta;
-
-        while (diffTheta < -Math.PI) diffTheta += Math.PI * 2;
-        while (diffTheta > Math.PI) diffTheta -= Math.PI * 2;
-
-        const rChanged = Math.abs(diffR) > threshold;
-        const thetaChanged = targetR > threshold && Math.abs(diffTheta) > threshold;
-
-        if (rChanged || thetaChanged) {
-            const nextR = currR + diffR * lerpFactor;
-            const nextTheta = currTheta + (thetaChanged ? diffTheta * lerpFactor : 0);
-
-            curr.re = nextR * Math.cos(nextTheta);
-            curr.im = nextR * Math.sin(nextTheta);
-            anyDifference = true;
-        } else {
-            curr.re = target.re;
-            curr.im = target.im;
-        }
-    }
-
-    if (!anyDifference) {
-        isTransitioning = false;
-    }
-
+    const result = stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFactor, threshold);
+    isTransitioning = result.isTransitioning;
     return {
         isTransitioning,
-        currentAmplitudes,
+        currentAmplitudes: result.currentAmplitudes,
         currentQubits
     };
 }
@@ -406,6 +428,57 @@ function getCurrentAmplitudes() {
 
 function getCurrentQubits() {
     return currentQubits;
+}
+
+function generateStatevectorPng() {
+    initStatevectorElements();
+    if (!statevectorCanvas) return '';
+
+    if (statevectorMode === 'probability') {
+        return statevectorCanvas.toDataURL('image/png');
+    }
+
+    const dpr = window.devicePixelRatio || 1;
+    const chartW = statevectorCanvas.width;
+    const chartH = statevectorCanvas.height;
+    const legendExtraH = Math.floor(56 * dpr);
+    const totalW = chartW;
+    const totalH = chartH + legendExtraH;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = totalW;
+    offscreen.height = totalH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return statevectorCanvas.toDataURL('image/png');
+
+    // Draw main chart canvas
+    ctx.drawImage(statevectorCanvas, 0, 0);
+
+    // Draw Phase legend at bottom
+    const cssTotalW = totalW / dpr;
+    const cssChartH = chartH / dpr;
+    const legendW = 220;
+    const legendBarH = 10;
+    const legendX = (cssTotalW - legendW) / 2;
+    const legendY = cssChartH + 18;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    drawPhaseLegendToCanvas(ctx, {
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendBarH,
+        orientation: 'horizontal',
+        showTitle: true,
+        showTicks: true,
+        titleX: cssTotalW / 2,
+        titleY: cssChartH + 8
+    });
+
+    ctx.restore();
+    return offscreen.toDataURL('image/png');
 }
 
 const statevectorVisualization = {
@@ -448,7 +521,7 @@ const statevectorVisualization = {
 
     animate(lerpFactor = 0.20) {
         if (isTransitioning) {
-            const transition = stepStatevectorTransition(lerpFactor, 1e-4);
+            const transition = stepStatevectorTransitionInternal(lerpFactor, 1e-4);
             drawStateVectorHistogramWithAmplitudes(transition.currentAmplitudes, transition.currentQubits);
         }
     },
@@ -460,6 +533,14 @@ const statevectorVisualization = {
             const { state, N } = getQsphereState(lastResult);
             drawStateVectorHistogramWithAmplitudes(state, N);
         }
+    },
+
+    async export() {
+        const pngDataUrl = generateStatevectorPng();
+        return {
+            filenamePrefix: 'statevector',
+            pngDataUrl
+        };
     }
 };
 
@@ -470,6 +551,7 @@ export {
     initStatevectorElements,
     renderStateVectorHistogram,
     drawStateVectorHistogramWithAmplitudes,
+    stepStatevectorTransitionInternal as stepActiveStatevectorTransition,
     stepStatevectorTransition,
     getIsTransitioning,
     getCurrentAmplitudes,
@@ -477,22 +559,8 @@ export {
     formatBasisState,
     formatPhasePi,
     getQsphereState,
-    getPhaseToRgb
+    getPhaseToRgb,
+    setStatevectorMode,
+    getStatevectorMode,
+    generateStatevectorPng
 };
-
-if (typeof window !== 'undefined') {
-    window.statevector = {
-        statevectorVisualization,
-        initStatevectorElements,
-        renderStateVectorHistogram,
-        drawStateVectorHistogramWithAmplitudes,
-        stepStatevectorTransition,
-        getIsTransitioning,
-        getCurrentAmplitudes,
-        getCurrentQubits,
-        formatBasisState,
-        formatPhasePi,
-        getQsphereState,
-        getPhaseToRgb
-    };
-}

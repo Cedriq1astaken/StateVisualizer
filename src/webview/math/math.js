@@ -32,6 +32,12 @@ class Complex {
     }
 }
 
+function complexAbs2(value) {
+    if (!value) return 0;
+    if (typeof value.abs2 === 'function') return value.abs2();
+    return (value.re || 0) * (value.re || 0) + (value.im || 0) * (value.im || 0);
+}
+
 function vec3Len(v) {
     return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
@@ -54,6 +60,12 @@ function vec3Dot(a, b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+function vectorsClose(a, b, epsilon = 1e-3) {
+    return Math.abs(a[0] - b[0]) < epsilon
+        && Math.abs(a[1] - b[1]) < epsilon
+        && Math.abs(a[2] - b[2]) < epsilon;
+}
+
 function rodriguesRotate(p, k, angle) {
     const c = Math.cos(angle);
     const s = Math.sin(angle);
@@ -64,6 +76,18 @@ function rodriguesRotate(p, k, angle) {
         p[1] * c + kCrossP[1] * s + k[1] * kDotP * (1 - c),
         p[2] * c + kCrossP[2] * s + k[2] * kDotP * (1 - c)
     ];
+}
+
+function alignmentRotation(targetVec) {
+    const from = [0, 0, 1];
+    const to = vec3Normalize(targetVec);
+    const dot = vec3Dot(from, to);
+    if (dot > 0.99999) return { axis: [1, 0, 0], angle: 0 };
+    if (dot < -0.99999) return { axis: [1, 0, 0], angle: Math.PI };
+    return {
+        axis: vec3Normalize(vec3Cross(from, to)),
+        angle: Math.acos(Math.max(-1, Math.min(1, dot)))
+    };
 }
 
 function interpolateVector(current, target, factor) {
@@ -104,6 +128,21 @@ function interpolateVector(current, target, factor) {
     ]);
 
     return [dir[0] * r, dir[1] * r, dir[2] * r];
+}
+
+function distanceToSegment(point, start, end) {
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 1e-6) {
+        return Math.hypot(point[0] - start[0], point[1] - start[1]);
+    }
+    const t = Math.max(0, Math.min(1,
+        ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSquared));
+    return Math.hypot(
+        point[0] - (start[0] + t * dx),
+        point[1] - (start[1] + t * dy)
+    );
 }
 
 function mult(A, B) {
@@ -195,7 +234,6 @@ function rotateMatrix(rotX, rotY, rotZ, base) {
     return mat4Chain(base, mat4RotationX(rotX), mat4RotationY(rotY), mat4RotationZ(rotZ));
 }
 
-
 function projectPoint(p, matrix, width, height) {
     const x = p[0], y = p[1], z = p[2];
     const clipX = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
@@ -215,12 +253,16 @@ function projectPoint(p, matrix, width, height) {
 
 export {
     Complex,
+    complexAbs2,
     vec3Len,
     vec3Normalize,
     vec3Cross,
     vec3Dot,
+    vectorsClose,
     rodriguesRotate,
+    alignmentRotation,
     interpolateVector,
+    distanceToSegment,
     mult,
     mat4Chain,
     createPerspectiveMatrix,
@@ -234,26 +276,3 @@ export {
     rotateMatrix,
     projectPoint
 };
-
-if (typeof window !== 'undefined') {
-    window.Complex = Complex;
-    window.vec3Len = vec3Len;
-    window.vec3Normalize = vec3Normalize;
-    window.vec3Cross = vec3Cross;
-    window.vec3Dot = vec3Dot;
-    window.rodriguesRotate = rodriguesRotate;
-    window.interpolateVector = interpolateVector;
-    window.mult = mult;
-    window.mat4Chain = mat4Chain;
-    window.createPerspectiveMatrix = createPerspectiveMatrix;
-    window.createTranslationMatrix = createTranslationMatrix;
-    window.mat4RotationX = mat4RotationX;
-    window.mat4RotationY = mat4RotationY;
-    window.mat4RotationZ = mat4RotationZ;
-    window.rotateX = rotateX;
-    window.rotateY = rotateY;
-    window.rotateZ = rotateZ;
-    window.rotateMatrix = rotateMatrix;
-    window.projectPoint = projectPoint;
-}
-

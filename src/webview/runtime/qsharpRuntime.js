@@ -1,23 +1,11 @@
 import { getDebugService, loadWasmModule, StepResultId } from 'qsharp-lang';
+import { parseAmplitude, isTrivialState } from '../math/index.js';
 
 let wasmReady;
 
 function ensureWasm(wasmUri) {
     if (!wasmReady) wasmReady = loadWasmModule(wasmUri);
     return wasmReady;
-}
-
-function parseAmplitude(value) {
-    const normalized = String(value || '')
-        .replace(/\s/g, '')
-        .replace(/𝑖/g, 'i')
-        .replace(/[−–—]/g, '-');
-    const complex = normalized.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)([+-](?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)i$/i);
-    if (complex) return { re: Number(complex[1]), im: Number(complex[2]) };
-    const imaginary = normalized.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)i$/i);
-    if (imaginary) return { re: 0, im: Number(imaginary[1]) };
-    const real = Number.parseFloat(normalized);
-    return { re: Number.isFinite(real) ? real : 0, im: 0 };
 }
 
 function snapshotFromEntries(entries) {
@@ -35,18 +23,24 @@ function snapshotFromEntries(entries) {
     return { amplitudes, qubits };
 }
 
-function snapshotSignature(snapshot) {
-    return `${snapshot.qubits}:${snapshot.amplitudes.map(value => `${value.re.toPrecision(12)},${value.im.toPrecision(12)}`).join(';')}`;
-}
-
-function isTrivialState(snapshot) {
-    if (!snapshot || snapshot.qubits === 0) return true;
-    const amps = snapshot.amplitudes;
-    if (Math.abs(amps[0].re - 1) > 1e-8 || Math.abs(amps[0].im) > 1e-8) return false;
-    for (let i = 1; i < amps.length; i++) {
-        if (Math.abs(amps[i].re) > 1e-8 || Math.abs(amps[i].im) > 1e-8) return false;
+function areSnapshotsEqual(snapshotA, snapshotB, tolerance = 1e-9) {
+    if (!snapshotA || !snapshotB) return false;
+    if (snapshotA.qubits !== snapshotB.qubits) return false;
+    const ampsA = snapshotA.amplitudes;
+    const ampsB = snapshotB.amplitudes;
+    if (ampsA.length !== ampsB.length) return false;
+    for (let i = 0; i < ampsA.length; i++) {
+        const a = ampsA[i];
+        const b = ampsB[i];
+        if (Math.abs(a.re - b.re) > tolerance || Math.abs(a.im - b.im) > tolerance) {
+            return false;
+        }
     }
     return true;
+}
+
+function snapshotSignature(snapshot) {
+    return `${snapshot.qubits}:${snapshot.amplitudes.map(value => `${value.re.toPrecision(12)},${value.im.toPrecision(12)}`).join(';')}`;
 }
 
 function formatFailure(message) {
@@ -58,7 +52,7 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
     const debugService = await getDebugService();
     const sourceName = fileName || 'main.qs';
     const result = { qubitsDeclared: 0, qubitsList: [], states: [], steps: [] };
-    let lastSignature = null;
+    let lastSnapshot = null;
 
     const resetPattern = /^\s*Reset(All)?\s*\(/i;
     const resetLines = new Set(
@@ -87,23 +81,42 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
         let skipNextSnapshot = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
-            const step = await debugService.evalNext(breakpointIds, events);
+            let step;
+            try {
+                step = await debugService.evalNext(breakpointIds, events);
+            } catch (err) {
+                if (result.states.length === 0) {
+                    result.error = formatFailure(err?.message || err);
+                }
+                break;
+            }
+
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
-            const stackFrames = targetOp ? await debugService.getStackFrames() : [];
+            let stackFrames = [];
+            if (targetOp) {
+                try {
+                    stackFrames = await debugService.getStackFrames();
+                } catch (e) {}
+            }
             const isInsideTargetOp = !targetOp || stackFrames.some(
                 frame => frame.name.trim() === targetOp.name
             );
 
             const isResetLine = range && resetLines.has(range.start.line);
 
-            const snapshot = snapshotFromEntries(await debugService.captureQuantumState());
+            if (isInsideTargetOp && !skipNextSnapshot) {
+                let captured = [];
+                try {
+                    captured = await debugService.captureQuantumState();
+                } catch (e) {}
+                const snapshot = snapshotFromEntries(captured);
 
-            if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
-                result.qubitsDeclared = Math.max(result.qubitsDeclared, snapshot.qubits);
-                const signature = snapshotSignature(snapshot);
-                if (signature !== lastSignature) {
-                    lastSignature = signature;
-                    result.states.push(snapshot);
+                if (snapshot) {
+                    result.qubitsDeclared = Math.max(result.qubitsDeclared, snapshot.qubits);
+                    if (!areSnapshotsEqual(snapshot, lastSnapshot)) {
+                        lastSnapshot = snapshot;
+                        result.states.push(snapshot);
+                    }
                 }
             }
 
@@ -119,7 +132,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
                 break;
             }
 
-
             if (step.id === StepResultId.Fail) {
                 if (result.states.length === 0) {
                     result.error = formatFailure(step.error);
@@ -129,13 +141,16 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
             if (step.id === StepResultId.Return) break;
         }
 
-        if (!hasTargetLine) {
-            const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+        if (!hasTargetLine || result.states.length === 0) {
+            let captured = [];
+            try {
+                captured = await debugService.captureQuantumState();
+            } catch (e) {}
+            const finalSnapshot = snapshotFromEntries(captured);
             if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
                 result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
-                const signature = snapshotSignature(finalSnapshot);
-                if (signature !== lastSignature) {
-                    lastSignature = signature;
+                if (!areSnapshotsEqual(finalSnapshot, lastSnapshot)) {
+                    lastSnapshot = finalSnapshot;
                     result.states.push(finalSnapshot);
                 }
             }
@@ -166,7 +181,6 @@ function parseQSharp(source, targetOp, targetLine) {
 }
 
 if (typeof window !== 'undefined') {
-    window.qsphereQSharpRuntime = { executeQSharp };
     window.parseQSharp = parseQSharp;
 }
 

@@ -8,6 +8,8 @@ const packageRoot = path.resolve(scriptsDir, '..');
 
 const runtimeEntry = path.join(packageRoot, 'src', 'webview', 'runtime', 'qsharpRuntime.js');
 const runtimeBundle = path.join(packageRoot, 'dist', 'qsharpRuntime.bundle.js');
+const qiskitRuntimeEntry = path.join(packageRoot, 'src', 'webview', 'runtime', 'qiskitRuntime.js');
+const qiskitRuntimeBundle = path.join(packageRoot, 'dist', 'qiskitRuntime.bundle.js');
 const wasmSource = path.join(
     packageRoot,
     'node_modules',
@@ -26,30 +28,39 @@ const distDirectory = path.join(packageRoot, 'dist');
 await mkdir(distDirectory, { recursive: true });
 await mkdir(wasmDirectory, { recursive: true });
 
-await build({
-    entryPoints: [runtimeEntry],
+const sharedBuildOptions = {
     bundle: true,
     format: 'iife',
     platform: 'browser',
     target: 'es2020',
-    outfile: runtimeBundle,
     legalComments: 'none',
     sourcemap: false
+};
+
+await build({
+    ...sharedBuildOptions,
+    entryPoints: [runtimeEntry],
+    outfile: runtimeBundle
 });
 
 await build({
+    ...sharedBuildOptions,
+    entryPoints: [qiskitRuntimeEntry],
+    outfile: qiskitRuntimeBundle
+});
+
+await build({
+    ...sharedBuildOptions,
     entryPoints: [webviewEntry],
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'es2020',
     outfile: webviewBundle,
-    legalComments: 'none',
-    sourcemap: false,
     external: [],
     define: {
         'process.env.NODE_ENV': '"production"'
     }
 });
 
+const katexSource = path.join(packageRoot, 'node_modules', 'katex', 'dist');
+const katexTarget = path.join(distDirectory, 'katex');
+
 await cp(wasmSource, wasmTarget);
+await cp(katexSource, katexTarget, { recursive: true });

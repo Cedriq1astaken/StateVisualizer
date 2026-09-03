@@ -1,7 +1,7 @@
 {
   "name": "state-visualizer",
   "displayName": "StateVisualizer",
-  "description": "Interactive quantum state visualizer with live step-through execution for Q#",
+  "description": "Interactive quantum state visualizer with live step-through execution for Q# and Qiskit",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"
@@ -11,7 +11,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onLanguage:qsharp"
+    "onLanguage:qsharp",
+    "onLanguage:python"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -24,7 +25,6 @@
     "README.md"
   ],
   "contributes": {
-
     "commands": [
       {
         "command": "qsphere.openVisualizer",
@@ -47,7 +47,7 @@
       {
         "command": "qsphere.inspectCurrentLine",
         "key": "shift+enter",
-        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp)"
+        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python)"
       }
     ],
     "menus": {
@@ -55,31 +55,30 @@
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         }
       ],
       "editor/context": [
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         },
         {
           "command": "qsphere.inspectCurrentLine",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
         }
       ]
     }
   },
-
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "npm run bundle:webview && tsc -p ./",
     "bundle:webview": "node scripts/build-webview.mjs",
-
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile"
+    "pretest": "npm run compile",
+    "test": "node --test test/**/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
@@ -88,6 +87,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "katex": "^0.18.5",
     "qsharp-lang": "^1.31.0",
     "three": "^0.170.0"
   }

@@ -1,152 +1,44 @@
 import * as THREE from 'three';
 import {
     projectPoint,
-    rotateMatrix
-} from '../math/math.js';
-import {
+    rotateMatrix,
     getPhaseToRgb,
     formatBasisState,
     formatPhasePi,
     getQsphereState,
-    renderStateVectorHistogram,
-    stepStatevectorTransition,
+    hammingWeight,
+    computeQspherePoints,
+    stepStatevectorTransition
+} from '../math/index.js';
+import {
     getIsTransitioning,
     getCurrentAmplitudes,
-    getCurrentQubits
+    getCurrentQubits,
+    stepActiveStatevectorTransition
 } from './statevector.js';
+import {
+    drawPhaseLegendToCanvas
+    // generatePhaseGradientSvgDef,
+    // generatePhaseLegendSvg
+} from '../render/phaseLegend.js';
+import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
-function hammingWeight(n) {
-    let count = 0;
-    while (n > 0) {
-        count += n & 1;
-        n >>>= 1;
-    }
-    return count;
-}
+let qsphereHoverInfo = null;
 
-function computeQspherePoints(N) {
-    const size = 2 ** N;
-    const byWeight = Array.from({ length: N + 1 }, () => []);
-    for (let k = 0; k < size; k++) byWeight[hammingWeight(k)].push(k);
-
-    return Array.from({ length: size }, (_, k) => {
-        const w = hammingWeight(k);
-        const group = byWeight[w];
-        const M = group.length;
-        const j = group.indexOf(k);
-        const theta = N === 0 ? 0 : (Math.PI * w) / N;
-        const phi = M === 1 ? 0 : (2 * Math.PI * j) / M;
-        return {
-            index: k,
-            x: Math.sin(theta) * Math.cos(phi),
-            y: Math.cos(theta),
-            z: Math.sin(theta) * Math.sin(phi),
-            w
-        };
-    });
-}
-
-function computeQsphereWithState(state, N, options) {
-    const focusedIndex = options?.focusedIndex;
-    const ringVertices = buildHammingRings(N);
-    const spokeVertices = buildQSphereSpokes(state, N, focusedIndex);
+function computeQsphereWithState(state, N) {
+    const points = computeQspherePoints(N);
     return {
-        nodeVertices: buildQNodes(state, N, focusedIndex),
-        ringVertices,
-        spokeVertices,
-        lineVertices: ringVertices,
-        points: computeQspherePoints(N),
-        hoverTargets: buildQSphereHoverTargets(state, N),
+        points,
+        hoverTargets: buildQSphereHoverTargets(state, N, points),
         state,
         N
     };
 }
 
-function getFocusedAlpha(pointIndex, focusedIndex) {
-    if (focusedIndex === null || focusedIndex === undefined || pointIndex === focusedIndex) {
-        return 1.0;
-    }
-    return 0.24;
-}
-
-function buildQNodes(state, N, focusedIndex) {
-    const verts = [];
-    const points = computeQspherePoints(N);
-    for (const point of points) {
-        const amp = state[point.index] || { re: 0, im: 0 };
-        const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
-        const radius = 0.12 * Math.sqrt(probability);
-        const phase = Math.atan2(amp.im, amp.re);
-        const [r, g, b] = getPhaseToRgb(phase);
-        const alpha = getFocusedAlpha(point.index, focusedIndex);
-        verts.push(...buildNodeSphere(point.x, point.y, point.z, radius, r, g, b, alpha, 8));
-    }
-    return new Float32Array(verts);
-}
-
-function buildNodeSphere(cx, cy, cz, radius, r, g, b, a, segments) {
-    const verts = [];
-    for (let ri = 0; ri < segments; ri++) {
-        const t0 = (ri / segments) * Math.PI;
-        const t1 = ((ri + 1) / segments) * Math.PI;
-        for (let si = 0; si < segments; si++) {
-            const p0 = (si / segments) * 2 * Math.PI;
-            const p1 = ((si + 1) / segments) * 2 * Math.PI;
-            const v = [
-                [Math.sin(t0) * Math.cos(p0), Math.cos(t0), Math.sin(t0) * Math.sin(p0)],
-                [Math.sin(t0) * Math.cos(p1), Math.cos(t0), Math.sin(t0) * Math.sin(p1)],
-                [Math.sin(t1) * Math.cos(p0), Math.cos(t1), Math.sin(t1) * Math.sin(p0)],
-                [Math.sin(t1) * Math.cos(p1), Math.cos(t1), Math.sin(t1) * Math.sin(p1)]
-            ];
-            for (const tri of [[0, 1, 2], [1, 3, 2]]) {
-                for (const vi of tri) {
-                    const [nx, ny, nz] = v[vi];
-                    verts.push(cx + radius * nx, cy + radius * ny, cz + radius * nz, r, g, b, a);
-                }
-            }
-        }
-    }
-    return verts;
-}
-
-function buildHammingRings(N) {
-    const segments = 64;
-    const verts = [];
-    for (let w = 1; w < N; w++) {
-        const theta = (Math.PI * w) / N;
-        const ringY = Math.cos(theta);
-        const ringR = Math.sin(theta);
-        for (let i = 0; i < segments; i++) {
-            const a0 = (i / segments) * 2 * Math.PI;
-            const a1 = ((i + 1) / segments) * 2 * Math.PI;
-            verts.push(ringR * Math.cos(a0), ringY, ringR * Math.sin(a0));
-            verts.push(ringR * Math.cos(a1), ringY, ringR * Math.sin(a1));
-        }
-    }
-    return new Float32Array(verts);
-}
-
-function buildQSphereSpokes(state, N, focusedIndex) {
-    const points = computeQspherePoints(N);
-    const verts = [];
-    for (const point of points) {
-        const amp = state[point.index] || { re: 0, im: 0 };
-        const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
-        const phase = Math.atan2(amp.im, amp.re);
-        const [r, g, b] = getPhaseToRgb(phase);
-        const alpha = getFocusedAlpha(point.index, focusedIndex);
-        verts.push(0, 0, 0, r, g, b, alpha);
-        verts.push(point.x, point.y, point.z, r, g, b, alpha);
-    }
-    return new Float32Array(verts);
-}
-
-function buildQSphereHoverTargets(state, N) {
-    const points = computeQspherePoints(N);
+function buildQSphereHoverTargets(state, N, points = null) {
+    const pts = points || computeQspherePoints(N);
     const targets = [];
-    for (const point of points) {
+    for (const point of pts) {
         const amp = state[point.index] || { re: 0, im: 0 };
         const probability = amp.re * amp.re + amp.im * amp.im;
         const phase = Math.atan2(amp.im, amp.re);
@@ -222,40 +114,52 @@ function createHammingRings(N, lineMat) {
 let threeState = null;
 let lastResult = null;
 let _qsLabelData = [];
-let qsphereHoverInfo = null;
+let _qsLastLabelKey = null;
 
 function getQsphereHoverInfo() {
-    if (qsphereHoverInfo) return qsphereHoverInfo;
     const container = document.getElementById('container');
     if (!container) return null;
-    qsphereHoverInfo = document.createElement('div');
-    qsphereHoverInfo.className = 'qubit-hover-info';
-    qsphereHoverInfo.hidden = true;
-    container.appendChild(qsphereHoverInfo);
+    qsphereHoverInfo = getOrCreateHoverTooltip(container, 'qsphere-hover-info', qsphereHoverInfo);
     return qsphereHoverInfo;
 }
 
 function rebuildQsphereLabels(points, N, state) {
     const qsLabelsDiv = document.getElementById('qs-labels');
     if (!qsLabelsDiv) return;
-    qsLabelsDiv.innerHTML = '';
-    _qsLabelData = [];
-    if (!points || !N) return;
+    if (!points || !N) {
+        qsLabelsDiv.innerHTML = '';
+        _qsLabelData = [];
+        _qsLastLabelKey = null;
+        return;
+    }
 
+    const visiblePoints = [];
     for (const pt of points) {
         if (state) {
             const amp = state[pt.index] || { re: 0, im: 0 };
             const probability = amp.re * amp.re + amp.im * amp.im;
             if (probability < 1e-5) continue;
         }
+        visiblePoints.push(pt);
+    }
 
+    const visibleKey = `${N}:${visiblePoints.map(p => p.index).join(',')}`;
+    if (visibleKey === _qsLastLabelKey) {
+        return;
+    }
+    _qsLastLabelKey = visibleKey;
+
+    qsLabelsDiv.innerHTML = '';
+    _qsLabelData = [];
+
+    for (const pt of visiblePoints) {
         const binaryStr = pt.index.toString(2).padStart(N, '0');
         const el = document.createElement('div');
         el.className = 'label qs-label';
         el.textContent = '|' + binaryStr + '⟩';
         el.dataset.ptIndex = String(pt.index);
         qsLabelsDiv.appendChild(el);
-        _qsLabelData.push({ el, pos: [pt.x * 1.15, pt.y * 1.15, pt.z * 1.15] });
+        _qsLabelData.push({ el, pos: [pt.x * 1.18, pt.y * 1.18, pt.z * 1.18] });
     }
 }
 
@@ -274,39 +178,84 @@ function updateQsphereLabels(modelMatrix, w, h) {
 function updateQsphereSceneWithAmplitudes(state, N, options = {}) {
     if (!threeState) return;
 
-    const qs = computeQsphereWithState(state, N, {
-        focusedIndex: threeState._qsphereHoveredIndex
-    });
-
+    const qs = computeQsphereWithState(state, N);
+    const points = qs.points;
     const group = threeState.qsphereGroup;
-    while (group.children.length > 0) {
-        const child = group.children[0];
-        group.remove(child);
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) child.material.dispose();
+
+    if (threeState._qsphereGroupN !== N || !threeState._qsphereNodes || threeState._qsphereNodes.length !== points.length) {
+        while (group.children.length > 0) {
+            const child = group.children[0];
+            group.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+            }
+        }
+
+        const rings = createHammingRings(N, threeState.lineMaterial);
+        group.add(rings);
+
+        const nodes = [];
+        const spokes = [];
+
+        for (const point of points) {
+            const node = createQnodeMesh(point.x, point.y, point.z, 1, 1, 1, 1, 1.0);
+            node.visible = false;
+            group.add(node);
+            nodes.push(node);
+
+            const spoke = createSpokeMesh([point.x, point.y, point.z], 0.015, 1, 1, 1, 1.0);
+            if (spoke) {
+                spoke.visible = false;
+                group.add(spoke);
+                spokes.push(spoke);
+            } else {
+                spokes.push(null);
+            }
+        }
+
+        threeState._qsphereGroupN = N;
+        threeState._qsphereNodes = nodes;
+        threeState._qsphereSpokes = spokes;
     }
 
-    const rings = createHammingRings(qs.N, threeState.lineMaterial);
-    group.add(rings);
+    const nodes = threeState._qsphereNodes;
+    const spokes = threeState._qsphereSpokes;
+    const focusedIndex = threeState._qsphereHoveredIndex;
 
-    const points = qs.points;
-
-    for (const point of points) {
+    for (let i = 0; i < points.length; i++) {
+        const point = points[i];
+        const node = nodes[i];
+        const spoke = spokes[i];
         const amp = state[point.index] || { re: 0, im: 0 };
         const probability = amp.re * amp.re + amp.im * amp.im;
-        if (probability < 1e-5) continue;
+
+        if (probability < 1e-5) {
+            if (node) node.visible = false;
+            if (spoke) spoke.visible = false;
+            continue;
+        }
 
         const radius = 0.12 * Math.sqrt(probability);
         const phase = Math.atan2(amp.im, amp.re);
         const [r, g, b] = getPhaseToRgb(phase);
-        const focusedIndex = threeState._qsphereHoveredIndex;
         const alpha = (focusedIndex === null || focusedIndex === undefined || point.index === focusedIndex) ? 1.0 : 0.24;
 
-        const node = createQnodeMesh(point.x, point.y, point.z, radius, r, g, b, alpha);
-        group.add(node);
+        if (node) {
+            node.visible = true;
+            node.scale.set(radius, radius, radius);
+            node.material.color.setRGB(r, g, b);
+            node.material.opacity = alpha;
+            node.material.transparent = alpha < 1.0;
+        }
 
-        const spoke = createSpokeMesh([point.x, point.y, point.z], 0.015, r, g, b, alpha);
-        if (spoke) group.add(spoke);
+        if (spoke) {
+            spoke.visible = true;
+            spoke.material.color.setRGB(r, g, b);
+            spoke.material.opacity = alpha;
+            spoke.material.transparent = alpha < 1.0;
+        }
     }
 
     threeState._qsphereData = qs;
@@ -377,6 +326,177 @@ function updateQsphereHover(event, canvas, rotationAngles) {
     hoverInfo.hidden = false;
 }
 
+/*
+function generateQsphereSvg() {
+    const qsphereData = threeState?._qsphereData;
+    const N = qsphereData?.N || (lastResult ? getQsphereState(lastResult).N : 0);
+    const state = qsphereData?.state || (lastResult ? getQsphereState(lastResult).state : []);
+    const points = qsphereData?.points || computeQspherePoints(N);
+
+    const totalW = 420;
+    const totalH = 340;
+    const sphereBoxSize = 300;
+    const sphereOffsetX = 10;
+    const sphereOffsetY = 20;
+
+    const rotation = (typeof window !== 'undefined' && window.rotationAngles) ? window.rotationAngles : [0.3, 0.0, 0.0];
+    const modelMatrix = threeState?._projMatrix
+        ? rotateMatrix(...rotation, threeState._projMatrix)
+        : rotateMatrix(0.3, 0.0, 0.0, threeState?._buildProjMatrix ? threeState._buildProjMatrix() : new Float32Array(16));
+
+    let svg = `<?xml version="1.0" encoding="UTF-8"?>\n` +
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}">\n` +
+        `  <defs>\n` +
+        generatePhaseGradientSvgDef('qspherePhaseGrad', 'vertical') +
+        `    <style>\n` +
+        `      text { font-family: system-ui, -apple-system, sans-serif; }\n` +
+        `    </style>\n` +
+        `  </defs>\n`;
+
+    // Hamming Rings
+    const segments = 32;
+    for (let w = 1; w < N; w++) {
+        const theta = (Math.PI * w) / N;
+        const ringY = Math.cos(theta);
+        const ringR = Math.sin(theta);
+        const ringPoints = [];
+        for (let s = 0; s <= segments; s++) {
+            const a = (s / segments) * 2 * Math.PI;
+            const pt = projectPoint([ringR * Math.cos(a), ringY, ringR * Math.sin(a)], modelMatrix, sphereBoxSize, sphereBoxSize);
+            if (pt) ringPoints.push(`${(pt[0] + sphereOffsetX).toFixed(1)},${(pt[1] + sphereOffsetY).toFixed(1)}`);
+        }
+        if (ringPoints.length > 1) {
+            svg += `  <polyline points="${ringPoints.join(' ')}" fill="none" stroke="#5a6578" stroke-width="1" stroke-opacity="0.4"/>\n`;
+        }
+    }
+
+    // Outer sphere boundary
+    const sphereCenter = projectPoint([0, 0, 0], modelMatrix, sphereBoxSize, sphereBoxSize) || [sphereBoxSize / 2, sphereBoxSize / 2];
+    svg += `  <circle cx="${(sphereCenter[0] + sphereOffsetX).toFixed(1)}" cy="${(sphereCenter[1] + sphereOffsetY).toFixed(1)}" r="92" fill="none" stroke="#5a6578" stroke-width="1.2" stroke-opacity="0.35"/>\n`;
+
+    // Spokes and Nodes
+    const originPt = projectPoint([0, 0, 0], modelMatrix, sphereBoxSize, sphereBoxSize);
+
+    for (const point of points) {
+        const amp = state[point.index] || { re: 0, im: 0 };
+        const probability = amp.re * amp.re + amp.im * amp.im;
+        if (probability < 1e-5) continue;
+
+        const phase = Math.atan2(amp.im, amp.re);
+        const [r, g, b] = getPhaseToRgb(phase);
+        const color = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        const nodeRadius = Math.max(3, 14 * Math.sqrt(probability));
+
+        const targetPt = projectPoint([point.x, point.y, point.z], modelMatrix, sphereBoxSize, sphereBoxSize);
+        if (targetPt && originPt) {
+            const tx = targetPt[0] + sphereOffsetX;
+            const ty = targetPt[1] + sphereOffsetY;
+            const ox = originPt[0] + sphereOffsetX;
+            const oy = originPt[1] + sphereOffsetY;
+
+            // Spoke
+            svg += `  <line x1="${ox.toFixed(1)}" y1="${oy.toFixed(1)}" x2="${tx.toFixed(1)}" y2="${ty.toFixed(1)}" stroke="${color}" stroke-width="2" stroke-opacity="0.85"/>\n`;
+
+            // Node sphere circle
+            svg += `  <circle cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="${nodeRadius.toFixed(1)}" fill="${color}" stroke="#ffffff" stroke-width="0.8"/>\n`;
+
+            // Label
+            const binStr = point.index.toString(2).padStart(N, '0');
+            svg += `  <text x="${tx.toFixed(1)}" y="${(ty - nodeRadius - 4).toFixed(1)}" fill="#e0e0e0" font-size="11" font-weight="bold" text-anchor="middle">|${binStr}⟩</text>\n`;
+        }
+    }
+
+    // Vertical Phase Legend on the right
+    const legendX = 345;
+    const legendY = 60;
+    const legendW = 10;
+    const legendH = 180;
+
+    svg += generatePhaseLegendSvg({
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendH,
+        orientation: 'vertical',
+        gradientId: 'qspherePhaseGrad',
+        titleX: legendX + 16,
+        titleY: legendY - 14
+    });
+
+    svg += `</svg>`;
+    return svg;
+}
+*/
+
+function generateQspherePng() {
+    if (typeof document === 'undefined') return '';
+    const canvas = document.querySelector('#canvas');
+    if (!canvas || !threeState) return '';
+
+    // Render current Three.js scene
+    threeState.renderer.render(threeState.scene, threeState.camera);
+
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const sphereW = canvas.width;
+    const sphereH = canvas.height;
+    const legendExtraW = Math.floor(75 * dpr);
+    const totalW = sphereW + legendExtraW;
+    const totalH = sphereH;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = totalW;
+    offscreen.height = totalH;
+    const ctx = offscreen.getContext('2d');
+    if (!ctx) return canvas.toDataURL('image/png');
+
+    // Draw WebGL canvas
+    ctx.drawImage(canvas, 0, 0);
+
+    // Draw 3D projected HTML labels using live rotation
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.font = 'bold 13px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#e0e0e0';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    ctx.shadowBlur = 4;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const cssSphereW = sphereW / dpr;
+    const cssSphereH = sphereH / dpr;
+    const rotation = (typeof window !== 'undefined' && window.rotationAngles) ? window.rotationAngles : [0.3, 0.0, 0.0];
+    const modelMatrix = rotateMatrix(...rotation, threeState._projMatrix);
+
+    for (const item of _qsLabelData) {
+        const pt = projectPoint(item.pos, modelMatrix, cssSphereW, cssSphereH);
+        if (pt) {
+            ctx.fillText(item.el.textContent, pt[0], pt[1]);
+        }
+    }
+    ctx.shadowBlur = 0;
+
+    // Draw vertical phase legend
+    const legendX = cssSphereW + 15;
+    const legendY = (cssSphereH - 180) / 2;
+    const legendW = 10;
+    const legendH = 180;
+
+    drawPhaseLegendToCanvas(ctx, {
+        x: legendX,
+        y: legendY,
+        width: legendW,
+        height: legendH,
+        orientation: 'vertical',
+        showTitle: true,
+        showTicks: true,
+        titleX: legendX + 16,
+        titleY: legendY - 12
+    });
+
+    ctx.restore();
+    return offscreen.toDataURL('image/png');
+}
+
 const qsphereVisualization = {
     id: 'qsphere',
     label: 'Q-sphere',
@@ -435,13 +555,12 @@ const qsphereVisualization = {
         if (!result) return;
         lastResult = result;
         const { state, N } = getQsphereState(result);
-        renderStateVectorHistogram(result);
         updateQsphereSceneWithAmplitudes(state, N, options);
     },
 
     animate(lerpFactor = 0.20) {
         if (getIsTransitioning()) {
-            const transition = stepStatevectorTransition(lerpFactor, 1e-4);
+            const transition = stepActiveStatevectorTransition(lerpFactor, 1e-4);
             updateQsphereSceneWithAmplitudes(transition.currentAmplitudes, transition.currentQubits, { rebuildLabels: true });
         }
     },
@@ -460,6 +579,16 @@ const qsphereVisualization = {
 
     clearHover() {
         clearQsphereHover();
+    },
+
+    async export() {
+        // const svgContent = generateQsphereSvg();
+        const pngDataUrl = generateQspherePng();
+        return {
+            filenamePrefix: 'qsphere',
+            pngDataUrl
+            // svgContent
+        };
     }
 };
 
@@ -470,9 +599,6 @@ export {
     hammingWeight,
     computeQspherePoints,
     computeQsphereWithState,
-    buildQNodes,
-    buildHammingRings,
-    buildQSphereSpokes,
     buildQSphereHoverTargets,
     createQnodeMesh,
     createSpokeMesh,
@@ -482,23 +608,7 @@ export {
     updateQsphereLabels,
     updateQsphereHover,
     clearQsphereHover,
-    setQsphereHoveredIndex
+    setQsphereHoveredIndex,
+    // generateQsphereSvg,
+    generateQspherePng
 };
-
-if (typeof window !== 'undefined') {
-    window.qsphere = {
-        qsphereVisualization,
-        computeQspherePoints,
-        computeQsphereWithState,
-        buildQNodes,
-        buildHammingRings,
-        buildQSphereSpokes,
-        buildQSphereHoverTargets,
-        updateQsphereSceneWithAmplitudes
-    };
-    window.computeQspherePoints = computeQspherePoints;
-    window.buildQNodes = buildQNodes;
-    window.buildHammingRings = buildHammingRings;
-    window.buildQSphereSpokes = buildQSphereSpokes;
-    window.buildQSphereHoverTargets = buildQSphereHoverTargets;
-}
