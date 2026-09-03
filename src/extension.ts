@@ -230,7 +230,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     function findPythonCircuit(doc: vscode.TextDocument): { name: string, startLine: number, endLine: number } | null {
-        const circuitPattern = /^(\s*)(\w+)\s*=\s*(?:\w+\.)*QuantumCircuit\s*\(\s*(\d+)/;
+        const circuitPattern = /^(\s*)(\w+)\s*=\s*(?:\w+\.)*QuantumCircuit\s*\(\s*(\w+)/;
 
         // Detect aliased QuantumCircuit names
         const fullText = doc.getText();
@@ -239,7 +239,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (aliasMatch) classNames.push(aliasMatch[1]);
 
         const classPattern = classNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-        const dynamicCircuitRe = new RegExp(`^(\\s*)(\\w+)\\s*=\\s*(?:\\w+\\.)*(?:${classPattern})\\s*\\(\\s*(?:num_qubits\\s*=\\s*)?(\\d+)`);
+        const dynamicCircuitRe = new RegExp(`^(\\s*)(\\w+)\\s*=\\s*(?:\\w+\\.)*(?:${classPattern})\\s*\\(\\s*(?:num_qubits\\s*=\\s*)?(\\w+)`);
 
         for (let line = 0; line < doc.lineCount; line++) {
             const lineText = doc.lineAt(line).text;
